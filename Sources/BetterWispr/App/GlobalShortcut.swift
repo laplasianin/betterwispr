@@ -5,6 +5,8 @@ import IOKit.hidsystem
 
 @MainActor
 final class GlobalShortcut {
+    /// Distinguishes this shortcut's Carbon events from other registrations in the same process.
+    let id: UInt32
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
     private var localMonitor: Any?
@@ -12,6 +14,8 @@ final class GlobalShortcut {
     private var modifierPressed = false
     var onPress: (() -> Void)?
     var onRelease: (() -> Void)?
+
+    init(id: UInt32 = 1) { self.id = id }
 
     func register(_ shortcut: DictationShortcut) throws {
         unregister()
@@ -31,7 +35,7 @@ final class GlobalShortcut {
             return
         }
         guard installHandler() else { throw ShortcutError.unavailable(shortcut) }
-        let identifier = EventHotKeyID(signature: 0x42575350, id: 1)
+        let identifier = EventHotKeyID(signature: 0x42575350, id: id)
         let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers.rawValue, identifier,
                                          GetApplicationEventTarget(), 0, &hotKey)
         guard status == noErr else { hotKey = nil; throw ShortcutError.unavailable(shortcut) }
@@ -82,11 +86,14 @@ final class GlobalShortcut {
         let context = Unmanaged.passUnretained(self).toOpaque()
         return InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
             guard let event, let context else { return OSStatus(eventNotHandledErr) }
+            var identifier = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                              MemoryLayout<EventHotKeyID>.size, nil, &identifier)
             let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
-            MainActor.assumeIsolated {
-                let shortcut = Unmanaged<GlobalShortcut>.fromOpaque(context).takeUnretainedValue()
-                (pressed ? shortcut.onPress : shortcut.onRelease)?()
-            }
+            let shortcut = Unmanaged<GlobalShortcut>.fromOpaque(context).takeUnretainedValue()
+            // Every registration installs this handler, so each one must ignore the other shortcuts' events.
+            guard identifier.id == shortcut.id else { return OSStatus(eventNotHandledErr) }
+            MainActor.assumeIsolated { (pressed ? shortcut.onPress : shortcut.onRelease)?() }
             return noErr
         }, specs.count, &specs, context, &handler) == noErr
     }
