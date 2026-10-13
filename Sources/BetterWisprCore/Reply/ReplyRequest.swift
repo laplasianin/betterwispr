@@ -41,8 +41,11 @@ public struct ReplyRequest: Equatable, Sendable {
     public func body(model: ClaudeModel, effort: ReplyEffort) -> [String: Any] {
         var content: [[String: Any]] = []
         if let screenshot {
+            // The system prompt and screenshot repeat unchanged across regenerations and edits; a cache breakpoint
+            // after the image lets those requests read both from the prompt cache instead of paying for them again.
             content.append(["type": "image",
-                            "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot.base64EncodedString()]])
+                            "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot.base64EncodedString()],
+                            "cache_control": ["type": "ephemeral"]])
         }
         content.append(["type": "text", "text": ReplyPrompt.userText(self)])
         // Thinking tokens count against this cap on these models, so it leaves room for reasoning before the reply.

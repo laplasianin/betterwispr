@@ -51,6 +51,8 @@ import Testing
     #expect(source["type"] as? String == "base64")
     #expect(source["media_type"] as? String == "image/jpeg")
     #expect(source["data"] as? String == Data([0xFF, 0xD8, 0xFF]).base64EncodedString())
+    // Regenerations and edits resend the same screenshot; the cache breakpoint makes the repeats cost a tenth.
+    #expect((content[0]["cache_control"] as? [String: String]) == ["type": "ephemeral"])
     let text = try #require(content[1]["text"] as? String)
     #expect(text.contains("<APP>Telegram</APP>"))
     #expect(text.contains("<WINDOW_TITLE>Vasya Pupkin</WINDOW_TITLE>"))
@@ -64,6 +66,7 @@ import Testing
     request.screenshot = nil
     let textOnly = try #require((request.body(model: .haiku, effort: .high)["messages"] as? [[String: Any]])?[0]["content"] as? [[String: Any]])
     #expect(textOnly.count == 1 && textOnly[0]["type"] as? String == "text")
+    #expect(textOnly[0]["cache_control"] == nil)
 
     request.previousDrafts = ["Sure, Thursday works."]
     request.action = .regenerate
