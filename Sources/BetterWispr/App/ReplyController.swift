@@ -70,6 +70,8 @@ final class ReplyController {
                 if state == .idle {
                     model.statusMessage = "Writing reply with \(modelName)…"
                     await compose(spoken, recording: recording)
+                    // Escape during generation already ended the session; a stale finish would hide a newer recording's capsule.
+                    guard model.generation == token, !Task.isCancelled else { return }
                     model.finishReply(nil)
                 } else {
                     model.finishReply(nil)
@@ -113,7 +115,7 @@ final class ReplyController {
     }
 
     private func generate() async {
-        guard let pending = request else { return }
+        guard let pending = request, !Task.isCancelled else { return }
         state = .generating
         do {
             let key = try ClaudeClient.keyStore.read(for: ClaudeClient.keyConnection) ?? ""
@@ -135,26 +137,36 @@ final class ReplyController {
     // MARK: Popup actions
 
     func regenerate() {
-        guard state == .preview || isFailed, request != nil else { return }
+        guard state == .preview || isFailed, !isRecordingEdit, request != nil else { return }
         request?.draft = draft
         request?.action = draft == lastModelDraft ? .regenerate : .rework
         work = Task { [weak self] in await self?.generate() }
     }
 
     func retry() {
-        guard isFailed, request != nil else { return }
+        guard isFailed, !isRecordingEdit, request != nil else { return }
         work = Task { [weak self] in await self?.generate() }
     }
 
-    /// Records a spoken edit through the capsule; the popup stays open.
+    /// Returns to the last draft after a failed regeneration without another request.
+    func showLastDraft() {
+        guard isFailed, hasDraft else { return }
+        state = .preview
+    }
+
+    /// Records a spoken edit through the capsule; the popup stays open. Pressed again, it ends the recording.
     func editByVoice() {
+        if isRecordingEdit {
+            if model.phase == .recording { model.finishRecording() }
+            return
+        }
         guard state == .preview || isFailed, !model.isBusy else { return }
         model.startRecording(held: false, reply: true)
     }
 
     func paste() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard state == .preview, !text.isEmpty else { return }
+        guard state == .preview, !isRecordingEdit, !text.isEmpty else { return }
         let target = target
         let settings = model.settings
         reset()
@@ -194,6 +206,21 @@ final class ReplyController {
     }
 
     private var isFailed: Bool { if case .failed = state { true } else { false } }
+
+    // MARK: Test hooks
+
+    /// Puts the controller in the preview state as if `draft` had just arrived for `instruction`.
+    func restoreForTesting(draft: String, instruction: String) {
+        var restored = ReplyRequest(instruction: instruction, windowText: nil, selectedText: nil, windowTitle: nil,
+                                    screenshot: nil, userName: "", appName: "Test")
+        restored.previousDrafts = [draft]
+        request = restored
+        self.draft = draft
+        lastModelDraft = draft
+        state = .preview
+    }
+
+    func failForTesting(_ error: ReplyError) { state = .failed(error) }
 
     private func reset() {
         context?.cancel()

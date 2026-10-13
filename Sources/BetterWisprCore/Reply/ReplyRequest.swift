@@ -45,8 +45,9 @@ public struct ReplyRequest: Equatable, Sendable {
                             "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot.base64EncodedString()]])
         }
         content.append(["type": "text", "text": ReplyPrompt.userText(self)])
+        // Thinking tokens count against this cap on these models, so it leaves room for reasoning before the reply.
         return ["model": model.rawValue,
-                "max_tokens": 1024,
+                "max_tokens": 4096,
                 "system": ReplyPrompt.system,
                 "output_config": ["effort": effort.rawValue],
                 "messages": [["role": "user", "content": content]]]

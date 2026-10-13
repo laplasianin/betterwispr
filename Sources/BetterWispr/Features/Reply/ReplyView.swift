@@ -58,7 +58,7 @@ struct ReplyView: View {
                     } else {
                         Button("Retry") { reply.retry() }
                     }
-                    if reply.hasDraft { Button("Back to draft") { reply.regenerate() } }
+                    if reply.hasDraft { Button("Back to draft") { reply.showLastDraft() } }
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)

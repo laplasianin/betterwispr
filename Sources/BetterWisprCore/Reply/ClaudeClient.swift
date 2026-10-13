@@ -48,24 +48,26 @@ public final class ClaudeClient: Sendable {
         return try await send(body, key: key)
     }
 
-    /// Checks a key with the smallest possible request; throws the same errors as `reply`.
+    /// Checks a key with a tiny request. Only the HTTP status matters: thinking shares `max_tokens`, so the model may
+    /// never reach its text, and that says nothing about the key.
     public func verify(key: String, model: ClaudeModel) async throws {
         let key = try Self.normalizedKey(key)
-        let body = try JSONSerialization.data(withJSONObject: ["model": model.rawValue, "max_tokens": 8,
+        let body = try JSONSerialization.data(withJSONObject: ["model": model.rawValue, "max_tokens": 64,
+                                                               "output_config": ["effort": "low"],
                                                                "messages": [["role": "user", "content": "Say hi."]]])
-        _ = try await send(body, key: key)
+        _ = try await send(body, key: key, requiringText: false)
     }
 
-    private func send(_ body: Data, key: String) async throws -> String {
-        do { return try await once(body, key: key) }
+    private func send(_ body: Data, key: String, requiringText: Bool = true) async throws -> String {
+        do { return try await once(body, key: key, requiringText: requiringText) }
         catch let error as ReplyError where error.isTransient {
             try await Task.sleep(for: retryDelay)
             try Task.checkCancellation()
-            return try await once(body, key: key)
+            return try await once(body, key: key, requiringText: requiringText)
         }
     }
 
-    private func once(_ body: Data, key: String) async throws -> String {
+    private func once(_ body: Data, key: String, requiringText: Bool) async throws -> String {
         var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.httpBody = body
@@ -80,13 +82,17 @@ public final class ClaudeClient: Sendable {
         catch { throw ReplyError.network(error.localizedDescription) }
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw ReplyError.emptyReply }
+        guard requiringText else {
+            try Self.checkStatus(data, status: http.statusCode)
+            return ""
+        }
         return try Self.parse(data, status: http.statusCode)
     }
 
-    /// Maps an HTTP status and body to the reply text or a `ReplyError`; never trusts the body to be JSON.
-    public static func parse(_ data: Data, status: Int) throws -> String {
+    /// Turns a non-2xx status into a `ReplyError`; never trusts the body to be JSON.
+    static func checkStatus(_ data: Data, status: Int) throws {
         switch status {
-        case 200..<300: break
+        case 200..<300: return
         case 401, 403: throw ReplyError.invalidKey
         case 429: throw ReplyError.rateLimited
         case 500...: throw ReplyError.server(status)
@@ -94,6 +100,11 @@ public final class ClaudeClient: Sendable {
             let message = (try? JSONDecoder().decode(Failure.self, from: data))?.error.message ?? "HTTP \(status)"
             throw ReplyError.badRequest(message)
         }
+    }
+
+    /// Maps an HTTP status and body to the reply text or a `ReplyError`.
+    public static func parse(_ data: Data, status: Int) throws -> String {
+        try checkStatus(data, status: status)
         guard let message = try? JSONDecoder().decode(Response.self, from: data) else { throw ReplyError.emptyReply }
         switch message.stop_reason {
         case "refusal": throw ReplyError.refused

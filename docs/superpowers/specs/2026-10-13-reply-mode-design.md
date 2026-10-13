@@ -187,7 +187,7 @@ edited draft `<DRAFT>` plus "rework this, preserving the user's changes", or
 for spoken edits `<DRAFT>` plus `<EDITS>` in order plus "apply these edits and
 leave the rest unchanged".
 
-Request parameters: `max_tokens: 1024`, `output_config: {effort: <setting>}`,
+Request parameters: `max_tokens: 4096` (thinking shares the cap), `output_config: {effort: <setting>}`,
 no `thinking` field (adaptive by default on these models). The screenshot is
 sent as `{"type": "image", "source": {"type": "base64", "media_type":
 "image/jpeg", "data": ...}}`.

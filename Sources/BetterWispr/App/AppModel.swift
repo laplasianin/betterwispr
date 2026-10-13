@@ -567,12 +567,14 @@ final class AppModel {
         return (raw, TranscriptCleaner.clean(raw, language: language))
     }
 
-    /// Ends the reply session's use of the capsule: idle on success, or the failure card.
+    /// Ends the reply session's use of the capsule: idle on success, or the failure card (`fail` tells the controller).
     func finishReply(_ failure: DictationFailure?) {
         activeRecording = nil
+        if let failure { fail(failure); return }
         replyMode = false
         replyShortcutPressedAt = nil
-        if let failure { fail(failure) } else { statusMessage = ""; phase = .idle }
+        statusMessage = ""
+        phase = .idle
     }
 
     func cancelRecording() {
@@ -601,6 +603,7 @@ final class AppModel {
 
     /// Immediate cleanup for failures and quitting; only user cancellation offers Undo.
     func discardRecording() {
+        let wasReply = replyMode
         generation = UUID()
         shortcutPressedAt = nil
         correctionWatcher.stop()
@@ -620,7 +623,8 @@ final class AppModel {
         cancelledRecording = nil
         feedbackSound?.stop()
         // A cancelled preparation may leave a partially loaded provider; load cleanly next time.
-        if loading == nil, phase == .transcribing || preparedModelID == nil {
+        // A reply cancelled while Claude writes has finished recognizing, so its provider is intact.
+        if loading == nil, (phase == .transcribing && !wasReply) || preparedModelID == nil {
             provider = nil
             preparedModelID = nil
         }
@@ -1160,6 +1164,12 @@ final class AppModel {
     }
 
     private func fail(_ failure: DictationFailure) {
+        // Every failure ends a reply session, including silence and microphone errors that never reach the controller.
+        if replyMode {
+            replyMode = false
+            replyShortcutPressedAt = nil
+            reply.cancelPending()
+        }
         statusMessage = failure.message
         present(.failed(failure), for: 6)
         playFeedback(.attention)

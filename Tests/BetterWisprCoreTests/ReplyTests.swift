@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import Testing
+@testable import BetterWispr
 @testable import BetterWisprCore
 
 @Test func replySettingsDefaultAndDecodeFromOlderWorkspaces() throws {
@@ -37,7 +38,7 @@ import Testing
                                windowTitle: "Vasya Pupkin", screenshot: Data([0xFF, 0xD8, 0xFF]), userName: "Ivan", appName: "Telegram")
     let body = request.body(model: .opus, effort: .low)
     #expect(body["model"] as? String == "claude-opus-5-5")
-    #expect(body["max_tokens"] as? Int == 1024)
+    #expect(body["max_tokens"] as? Int == 4096)
     #expect((body["output_config"] as? [String: Any])?["effort"] as? String == "low")
     #expect(body["thinking"] == nil)
     #expect(body["system"] as? String == ReplyPrompt.system)
@@ -182,17 +183,20 @@ import Testing
     await #expect(throws: ReplyError.timedOut) { try await quick.reply(to: request, model: .opus, effort: .low, key: "k") }
     #expect(probe.requests.count == 2)
 
-    probe.reset(script: [.reply("Hi")])
+    // Thinking shares max_tokens, so a key check must pass even when the model never reaches its text.
+    probe.reset(script: [.truncated])
     try await client.verify(key: "k", model: .haiku)
     sent = probe.requests
     #expect(sent[0].body.contains(#""model":"claude-haiku-5-5""#))
-    #expect(sent[0].body.contains(#""max_tokens":8"#))
+    #expect(sent[0].body.contains(#""effort":"low""#))
+    probe.reset(script: [.status(401)])
+    await #expect(throws: ReplyError.invalidKey) { try await client.verify(key: "k", model: .haiku) }
 }
 
 /// Records requests and plays a scripted answer for each; a lock keeps it safe from URLSession's threads.
 final class ClaudeRequestProbe: @unchecked Sendable {
     struct Request: Sendable { let url: String; let headers: [String: String]; let body: String }
-    enum Step: Sendable { case reply(String), status(Int), timeout }
+    enum Step: Sendable { case reply(String), status(Int), timeout, truncated }
     private let lock = NSLock()
     private var recorded: [Request] = []
     private var script: [Step] = []
@@ -228,6 +232,8 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
         case .status(let code): (status, data) = (code, Data("{}".utf8))
         case .reply(let text):
             (status, data) = (200, try! JSONSerialization.data(withJSONObject: ["content": [["type": "text", "text": text]], "stop_reason": "end_turn"]))
+        case .truncated:
+            (status, data) = (200, Data(#"{"content":[{"type":"thinking","thinking":""}],"stop_reason":"max_tokens"}"#.utf8))
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -257,4 +263,26 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
     let small = try #require(WindowSnapshot.jpeg(try image(width: 800, height: 600)))
     #expect(try size(of: small) == (800, 600, "public.jpeg"))
     #expect(wide.count < 400_000)
+}
+
+@Test @MainActor func replyPopupActionsWaitForASpokenEditAndBackToDraftIsFree() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let model = AppModel(store: LocalStore(directory: folder), startsServices: false)
+    let reply = model.reply
+    reply.restoreForTesting(draft: "Sure, Thursday works.", instruction: "tell him I agree")
+    #expect(reply.state == .preview)
+    reply.beginCapture(target: nil) // A second capture while a draft exists is a spoken edit.
+    #expect(reply.isRecordingEdit)
+    reply.paste()
+    #expect(reply.state == .preview) // Return must not paste the old draft mid-edit.
+    reply.regenerate()
+    #expect(reply.state == .preview)
+    reply.cancelPending()
+    #expect(!reply.isRecordingEdit)
+    reply.failForTesting(.rateLimited)
+    #expect(reply.state == .failed(.rateLimited))
+    reply.showLastDraft()
+    #expect(reply.state == .preview)
+    #expect(reply.draft == "Sure, Thursday works.")
 }
