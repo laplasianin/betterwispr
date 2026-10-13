@@ -1,6 +1,7 @@
 import AppKit
 import BetterWisprCore
 import Observation
+import OSLog
 
 /// One reply session: captures the screen while the user speaks, asks Claude for a draft and owns the popup's state.
 /// Recording and recognition run through `AppModel`, so the recorder and the capsule are never shared between two state machines.
@@ -105,7 +106,20 @@ final class ReplyController {
         request = ReplyRequest(instruction: instruction, windowText: context?.window, selectedText: context?.selectedText,
                                windowTitle: windowTitle, screenshot: screenshot,
                                userName: model.settings.reply.userName, appName: recording.target?.localizedName ?? appName)
+        Logger(subsystem: "org.betterwispr.app", category: "Reply")
+            .notice("Reply context: window text \(context?.window?.count ?? 0, privacy: .public) chars, selection \(context?.selectedText?.count ?? 0, privacy: .public) chars, screenshot \(screenshot?.count ?? 0, privacy: .public) bytes")
+        // Without any view of the window the model can only guess; say so instead of spending a request on a guess.
+        guard (context?.window ?? "").isEmpty == false || screenshot != nil else {
+            state = .failed(.noContext(appName))
+            return
+        }
         await generate()
+    }
+
+    /// Sends the request even though nothing could be read from the window, for instructions that are the message itself.
+    func sendWithoutContext() {
+        guard case .failed(.noContext) = state, request != nil else { return }
+        work = Task { [weak self] in await self?.generate() }
     }
 
     private func applyEdit(_ edit: String) async {

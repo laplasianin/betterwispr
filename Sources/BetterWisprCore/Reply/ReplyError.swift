@@ -4,6 +4,7 @@ public enum ReplyError: LocalizedError, Equatable, Sendable {
     case missingKey
     case invalidKey
     case emptyInstruction
+    case noContext(String)
     case rateLimited
     case server(Int)
     case badRequest(String)
@@ -18,6 +19,7 @@ public enum ReplyError: LocalizedError, Equatable, Sendable {
         case .missingKey: "Add your Claude API key in Settings → Reply."
         case .invalidKey: "Claude rejected the API key. Check it in Settings → Reply."
         case .emptyInstruction: "No instruction heard. Hold the shortcut and say what to reply."
+        case .noContext(let app): "Nothing could be read from \(app): no window text and no screenshot. Allow Screen Recording so Claude can see the window, then try again."
         case .rateLimited: "Claude is busy right now. Try again in a moment."
         case .server(let status): "Claude returned HTTP \(status). Try again in a moment."
         case .badRequest(let message): "Claude rejected the request: \(message)"

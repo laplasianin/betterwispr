@@ -55,6 +55,9 @@ struct ReplyView: View {
                 HStack {
                     if error == .missingKey || error == .invalidKey {
                         Button("Open Settings") { reply.openSettings() }
+                    } else if case .noContext = error {
+                        if reply.needsScreenRecording { Button("Allow Screen Recording…") { reply.requestScreenRecording() } }
+                        Button("Send anyway") { reply.sendWithoutContext() }
                     } else {
                         Button("Retry") { reply.retry() }
                     }
