@@ -19,11 +19,14 @@ struct ReplySettingsSection: View {
                 HStack(spacing: 6) {
                     SecureField(hasSavedKey ? "New key (blank keeps saved key)" : "sk-ant-…", text: $key)
                         .textFieldStyle(.roundedBorder)
-                        .frame(width: 220)
+                        .frame(width: 200)
+                    // Buttons keep their natural width; the title column yields instead of the labels turning into "…".
                     Button("Save") { save() }.disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button(checking ? "Checking…" : "Test") { test() }.disabled(checking || (!hasSavedKey && key.isEmpty))
                     if hasSavedKey { Button("Remove") { remove() }.foregroundStyle(.red) }
                 }
+                .fixedSize()
+                .layoutPriority(1)
             }
             RowDivider()
             SettingRow("Model", caption: model.settings.reply.model.detail) {
