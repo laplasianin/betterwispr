@@ -123,6 +123,11 @@ final class AppModel {
     @ObservationIgnored private let startsServices: Bool
     @ObservationIgnored private let correctionWatcher = CorrectionWatcher()
     @ObservationIgnored private let globalShortcut = GlobalShortcut()
+    @ObservationIgnored private let replyShortcut = GlobalShortcut(id: 2)
+    @ObservationIgnored private var replyShortcutPressedAt: Date?
+    @ObservationIgnored lazy var reply = ReplyController(model: self)
+    /// The current recording belongs to reply mode, not dictation.
+    var replyMode = false
     @ObservationIgnored private var microphoneObserver: AudioInputObserver?
     @ObservationIgnored private var shortcutWarning: String?
     @ObservationIgnored private var provider: (any SpeechProvider)?
@@ -135,7 +140,7 @@ final class AppModel {
     @ObservationIgnored private var live: LiveTranscriber?
     @ObservationIgnored private var cardDismissal: Task<Void, Never>?
     @ObservationIgnored private var shortcutPressedAt: Date?
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private(set) var generation = UUID()
     @ObservationIgnored private var targetApplication: NSRunningApplication?
     @ObservationIgnored private var writingMode: WritingMode?
     @ObservationIgnored private var dictationContext: Task<DictationContext, Never>?
@@ -193,6 +198,8 @@ final class AppModel {
         meetingDetector.isEnabled = settings.detectMeetings
         globalShortcut.onPress = { [weak self] in self?.shortcutPressed() }
         globalShortcut.onRelease = { [weak self] in self?.shortcutReleased() }
+        replyShortcut.onPress = { [weak self] in self?.replyShortcutPressed() }
+        replyShortcut.onRelease = { [weak self] in self?.replyShortcutReleased() }
         warmUpSelectedModel()
         let warmUpAfterWake: @Sendable (Notification) -> Void = { [weak self] _ in
             MainActor.assumeIsolated { self?.warmUpSelectedModel(after: .seconds(3)) }
@@ -228,12 +235,40 @@ final class AppModel {
             statusMessage = "\(error.localizedDescription) Use the menu bar or Record button to dictate, or choose another shortcut in Settings."
             shortcutWarning = statusMessage
         }
+        do { try replyShortcut.register(settings.reply.shortcut) }
+        catch { ToastWindow.shared.show(Toast(failure: "Couldn’t use \(settings.reply.shortcut.displayName) for replies", error)) }
     }
 
-    func suspendShortcut() { globalShortcut.unregister() }
+    func suspendShortcut() {
+        globalShortcut.unregister()
+        replyShortcut.unregister()
+    }
+
+    func changeReplyShortcut(_ shortcut: DictationShortcut) {
+        guard !isBusy else { return }
+        guard shortcut != settings.shortcut else {
+            ToastWindow.shared.show(Toast(title: "Already used", message: "\(shortcut.displayName) starts dictation. Pick another shortcut for replies.",
+                                          systemImage: "keyboard", isError: true))
+            return
+        }
+        do {
+            try replyShortcut.register(shortcut)
+        } catch {
+            registerShortcut()
+            ToastWindow.shared.show(Toast(failure: "Couldn’t use \(shortcut.displayName)", error))
+            return
+        }
+        settings.reply.shortcut = shortcut
+        saveSettings()
+    }
 
     func changeShortcut(_ shortcut: DictationShortcut) {
         guard !isBusy else { return }
+        guard shortcut != settings.reply.shortcut else {
+            ToastWindow.shared.show(Toast(title: "Already used", message: "\(shortcut.displayName) writes replies. Pick another shortcut for dictation.",
+                                          systemImage: "keyboard", isError: true))
+            return
+        }
         do {
             try globalShortcut.register(shortcut)
         } catch {
@@ -251,7 +286,37 @@ final class AppModel {
         startRecording(held: false)
     }
 
-    private func startRecording(held: Bool) {
+    func replyShortcutPressed() {
+        guard replyShortcutPressedAt == nil || !isBusy else { return }
+        if isBusy {
+            // A toggled reply recording (press-to-toggle mode, or ⌘E in the popup) ends on the next press, like dictation does.
+            if phase == .recording, replyMode, !isHeldSession { finishRecording() }
+            return
+        }
+        guard reply.state != .generating else { return }
+        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+            ToastWindow.shared.show(Toast(title: "Switch apps", message: "Switch to the app you want to reply in, then hold \(settings.reply.shortcut.displayName).",
+                                          systemImage: "arrow.right.square"))
+            return
+        }
+        guard settings.dictationMode == .hold else { startRecording(held: false, reply: true); return }
+        replyShortcutPressedAt = Date()
+        startRecording(held: true, reply: true)
+    }
+
+    func replyShortcutReleased() {
+        guard let pressedAt = replyShortcutPressedAt else { return }
+        replyShortcutPressedAt = nil
+        guard replyMode, phase == .preparing || phase == .recording else { return }
+        if Date().timeIntervalSince(pressedAt) < 0.3 {
+            isHeldSession = false
+            if phase == .recording { statusMessage = "Reply: listening. Press \(settings.reply.shortcut.displayName) or click ✓ to finish." }
+        }
+        else if phase == .preparing { abandon(.releasedEarly(settings.reply.shortcut)) }
+        else { finishRecording() }
+    }
+
+    func startRecording(held: Bool, reply: Bool = false) {
         guard !isBusy else { return }
         cancelledRecording = nil
         feedbackSound?.stop()
@@ -262,16 +327,19 @@ final class AppModel {
             return
         }
         targetApplication = NSWorkspace.shared.frontmostApplication
+        replyMode = reply
         let modes = settings.modes
-        let website = modes.needsWebsite ? targetApplication.flatMap(WebsiteReader.read) : nil
-        writingMode = modes.match(app: targetApplication?.bundleIdentifier)?.mode
+        let website = reply || !modes.needsWebsite ? nil : targetApplication.flatMap(WebsiteReader.read)
+        writingMode = reply ? nil : modes.match(app: targetApplication?.bundleIdentifier)?.mode
         dictationContext?.cancel()
-        dictationContext = website == nil ? captureContext(for: settings.applying(writingMode)) : nil
+        dictationContext = reply || website != nil ? nil : captureContext(for: settings.applying(writingMode))
+        if reply { self.reply.beginCapture(target: targetApplication) }
+        let prefix = reply ? "Reply: " : ""
         isHeldSession = held
         let token = UUID()
         generation = token
         phase = .preparing
-        statusMessage = "Starting microphone…"
+        statusMessage = "\(prefix)Starting microphone…"
         partialTranscript = ""
         liveTranscript = LiveTranscript()
         recordingDuration = 0
@@ -298,7 +366,7 @@ final class AppModel {
                 guard self.generation == token else { return }
                 self.recorder.silenceThreshold = self.settings.silenceThreshold
                 self.recorder.microphone = self.settings.microphone
-                self.statusMessage = "Starting microphone…"
+                self.statusMessage = "\(prefix)Starting microphone…"
                 try await self.recorder.start(onSamples: onSamples)
                 let url = await website?.value
                 try Task.checkCancellation()
@@ -309,10 +377,10 @@ final class AppModel {
                 }
                 self.microphoneGranted = true
                 self.phase = .recording
-                let shortcut = self.settings.shortcut.displayName
-                self.statusMessage = self.isHeldSession ? "Listening. Release \(shortcut) to finish." : "Listening. Press \(shortcut) or click ✓ to finish."
+                let shortcut = reply ? self.settings.reply.shortcut.displayName : self.settings.shortcut.displayName
+                self.statusMessage = self.isHeldSession ? "\(prefix)Listening. Release \(shortcut) to finish." : "\(prefix)Listening. Press \(shortcut) or click ✓ to finish."
                 self.warmUpSelectedModel()
-                self.warmUpNotesModel(token: token)
+                if !reply { self.warmUpNotesModel(token: token) }
                 self.startLivePreview(live, model: model, token: token)
                 let started = Date()
                 self.ticker = Task { [weak self] in
@@ -352,7 +420,7 @@ final class AppModel {
         liveTranscript = LiveTranscript()
     }
 
-    private func finishRecording() {
+    func finishRecording() {
         guard phase == .recording else { return }
         ticker?.cancel()
         ticker = nil
@@ -384,8 +452,9 @@ final class AppModel {
                     return
                 }
                 self.playFeedback(.finished)
-                self.transcribe(DictationRecording(audio: audio, model: model, settings: settings,
-                                                  vocabulary: entries, target: target, mode: mode, context: context))
+                let recording = DictationRecording(audio: audio, model: model, settings: settings,
+                                                   vocabulary: entries, target: target, mode: mode, context: context)
+                if self.replyMode { self.reply.recordingFinished(recording) } else { self.transcribe(recording) }
             } catch {
                 guard self.generation == token else { return }
                 self.recorder.cancel()
@@ -412,16 +481,8 @@ final class AppModel {
             }
             guard let self else { return }
             do {
-                try Task.checkCancellation()
-                try await self.prepare(model, language: recording.settings.language)
-                try Task.checkCancellation()
-                guard self.generation == token, let provider = self.provider else { return }
-                let recognitionStarted = ContinuousClock.now
-                let raw = try await provider.transcribe(audioURL: audio.url, language: language, vocabulary: VocabularyProcessor.hints(entries))
-                Logger(subsystem: "org.betterwispr.app", category: "DictationTiming").notice("Recognition completed: elapsed=\(String(describing: recognitionStarted.duration(to: .now)), privacy: .public) empty=\(raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)")
-                try Task.checkCancellation()
-                guard self.generation == token else { return }
-                let lightlyCleaned = TranscriptCleaner.clean(raw, language: language)
+                let (raw, lightlyCleaned) = try await self.recognize(recording, token: token)
+                guard let provider = self.provider else { return }
                 let trigger = recording.settings.modes.match(transcript: lightlyCleaned)
                 let mode = trigger?.mode ?? recording.mode
                 let writingSettings = recording.settings.applying(mode)
@@ -490,15 +551,39 @@ final class AppModel {
         }
     }
 
+    /// Recognizes a recording with the selected model and applies light cleanup; shared by dictation and reply mode.
+    /// Throws `CancellationError` when another session replaced this one.
+    func recognize(_ recording: DictationRecording, token: UUID) async throws -> (raw: String, cleaned: String) {
+        let language = recording.settings.language == "auto" ? nil : recording.settings.language
+        try Task.checkCancellation()
+        try await prepare(recording.model, language: recording.settings.language)
+        try Task.checkCancellation()
+        guard generation == token, let provider else { throw CancellationError() }
+        let recognitionStarted = ContinuousClock.now
+        let raw = try await provider.transcribe(audioURL: recording.audio.url, language: language, vocabulary: VocabularyProcessor.hints(recording.vocabulary))
+        Logger(subsystem: "org.betterwispr.app", category: "DictationTiming").notice("Recognition completed: elapsed=\(String(describing: recognitionStarted.duration(to: .now)), privacy: .public) empty=\(raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)")
+        try Task.checkCancellation()
+        guard generation == token else { throw CancellationError() }
+        return (raw, TranscriptCleaner.clean(raw, language: language))
+    }
+
+    /// Ends the reply session's use of the capsule: idle on success, or the failure card.
+    func finishReply(_ failure: DictationFailure?) {
+        activeRecording = nil
+        replyMode = false
+        replyShortcutPressedAt = nil
+        if let failure { fail(failure) } else { statusMessage = ""; phase = .idle }
+    }
+
     func cancelRecording() {
         guard isBusy else { return }
         let recoverable: DictationRecording?
         if phase == .recording, let audio = try? recorder.stop() {
             let recording = DictationRecording(audio: audio, model: selectedModel, settings: settings, vocabulary: vocabulary,
                                               target: targetApplication, mode: writingMode, context: dictationContext.take())
-            recoverable = audio.hasSpeech ? recording : nil
+            recoverable = audio.hasSpeech && !replyMode ? recording : nil
         } else {
-            recoverable = activeRecording
+            recoverable = replyMode ? nil : activeRecording
         }
         discardRecording()
         cancelledRecording = recoverable
@@ -529,6 +614,9 @@ final class AppModel {
         recorder.cancel()
         endLivePreview()
         activeRecording = nil
+        if replyMode { reply.cancelPending() }
+        replyMode = false
+        replyShortcutPressedAt = nil
         cancelledRecording = nil
         feedbackSound?.stop()
         // A cancelled preparation may leave a partially loaded provider; load cleanly next time.
