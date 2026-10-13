@@ -20,6 +20,7 @@ final class ReplyPanelController {
     private let reply: ReplyController
     private let panel: ReplyPanel
     private let hosting: NSHostingView<ReplyView>
+    private var resizeObserver: (any NSObjectProtocol)?
 
     init(reply: ReplyController) {
         self.reply = reply
@@ -39,6 +40,10 @@ final class ReplyPanelController {
         panel.contentView = hosting
         panel.onKey = { [weak self] event in self?.handle(event) ?? false }
         reply.onChange = { [weak self] in self?.update() }
+        // The streamed draft grows the panel from its top-left corner; keep the whole panel on screen as it does.
+        resizeObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.keepOnScreen() }
+        }
     }
 
     func update() {
@@ -51,20 +56,33 @@ final class ReplyPanelController {
         if !panel.isVisible {
             position()
             panel.makeKeyAndOrderFront(nil)
-        } else if !panel.isKeyWindow {
-            panel.makeKey()
+        } else {
+            keepOnScreen()
+            if !panel.isKeyWindow { panel.makeKey() }
         }
+    }
+
+    private var screen: NSScreen {
+        let pointer = NSEvent.mouseLocation
+        return panel.screen ?? NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+
+    /// Moves the panel back inside the screen's visible area without changing its size.
+    private func keepOnScreen() {
+        let visible = screen.visibleFrame
+        var origin = panel.frame.origin
+        let size = panel.frame.size
+        origin.x = min(max(origin.x, visible.minX + 8), max(visible.minX + 8, visible.maxX - size.width - 8))
+        origin.y = min(max(origin.y, visible.minY + 8), max(visible.minY + 8, visible.maxY - size.height - 8))
+        if origin != panel.frame.origin { panel.setFrameOrigin(origin) }
     }
 
     private func position() {
         let pointer = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(pointer, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
-        let visible = screen.visibleFrame
         let size = panel.frame.size
-        var origin = NSPoint(x: pointer.x - size.width / 2, y: pointer.y - size.height - 24)
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
-        panel.setFrameOrigin(origin)
+        // Leave room below the pointer for the panel to grow while the draft streams in; it is clamped again on resize.
+        panel.setFrameOrigin(NSPoint(x: pointer.x - size.width / 2, y: pointer.y - size.height - 24))
+        keepOnScreen()
     }
 
     /// Enter pastes, Shift+Enter is a line break, Escape closes, ⌘R regenerates, ⌘E records an edit.
@@ -81,6 +99,8 @@ final class ReplyPanelController {
 
     func close() {
         reply.onChange = nil
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        resizeObserver = nil
         panel.close()
     }
 }
