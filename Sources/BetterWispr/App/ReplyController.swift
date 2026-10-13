@@ -28,6 +28,7 @@ final class ReplyController {
     @ObservationIgnored private var request: ReplyRequest?
     @ObservationIgnored private var lastModelDraft = ""
     @ObservationIgnored private var target: NSRunningApplication?
+    @ObservationIgnored private var instructionDuration: TimeInterval = 0
     @ObservationIgnored private var context: Task<DictationContext, Never>?
     @ObservationIgnored private var screenshot: Task<Data?, Never>?
     @ObservationIgnored private var work: Task<Void, Never>?
@@ -72,6 +73,7 @@ final class ReplyController {
                 }
                 if state == .idle {
                     model.statusMessage = "Writing reply with \(modelName)…"
+                    instructionDuration = recording.audio.duration
                     await compose(spoken, recording: recording)
                     // Escape during generation already ended the session; a stale finish would hide a newer recording's capsule.
                     guard model.generation == token, !Task.isCancelled else { return }
@@ -190,9 +192,11 @@ final class ReplyController {
 
     func paste() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard state == .preview, !isRecordingEdit, !text.isEmpty else { return }
+        guard state == .preview, !isRecordingEdit, !text.isEmpty, let pending = request else { return }
         let target = target
         let settings = model.settings
+        let instruction = ([pending.instruction] + pending.edits).joined(separator: " · ")
+        model.recordReply(text, instruction: instruction, modelName: "Reply · \(modelName)", duration: instructionDuration, appBundleID: target?.bundleIdentifier)
         reset()
         Task {
             // Let the panel close and the target's window take keyboard focus back before posting ⌘V.
@@ -255,6 +259,7 @@ final class ReplyController {
         draft = ""
         lastModelDraft = ""
         target = nil
+        instructionDuration = 0
         isRecordingEdit = false
         state = .idle
     }

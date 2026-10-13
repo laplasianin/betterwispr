@@ -567,6 +567,14 @@ final class AppModel {
         return (raw, TranscriptCleaner.clean(raw, language: language))
     }
 
+    /// Adds a pasted reply to History when History is on; the spoken instruction is kept as its raw text.
+    func recordReply(_ text: String, instruction: String, modelName: String, duration: TimeInterval, appBundleID: String?) {
+        guard settings.saveHistory else { return }
+        history.insert(Transcript(text: text, rawText: instruction, duration: duration, modelName: modelName,
+                                  language: "auto", appBundleID: appBundleID), at: 0)
+        do { try persist() } catch { statusMessage = "History could not be saved: \(error.localizedDescription)" }
+    }
+
     /// Ends the reply session's use of the capsule: idle on success, or the failure card (`fail` tells the controller).
     func finishReply(_ failure: DictationFailure?) {
         activeRecording = nil

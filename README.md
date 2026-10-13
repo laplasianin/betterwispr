@@ -63,7 +63,7 @@ falls back to a cloud provider on its own.
 - Models live in the `Models` folder next to it.
 - Audio is written to temporary files and deleted after each recording.
 - Built-in models only touch the network when you explicitly download one.
-- Reply mode sends the spoken instruction, the focused window's text and, if enabled, a screenshot of that window to Anthropic with your API key, only while you use the reply shortcut. The key lives in the Keychain. Drafts are not saved to History.
+- Reply mode sends the spoken instruction, the focused window's text and, if enabled, a screenshot of that window to Anthropic with your API key, only while you use the reply shortcut. The key lives in the Keychain. Pasted replies go to History like dictations, with your spoken instruction as the raw text.
 
 ## Troubleshooting
 
