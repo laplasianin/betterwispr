@@ -50,6 +50,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var completedOnboardingVersion: Int = 0
     /// The onboarding page to resume after quitting midway.
     public var onboardingStep: Int = 0
+    /// Reply mode: a second shortcut that writes a reply from the screen with Claude.
+    public var reply = ReplySettings()
 
     public var notesSelection: NotesModelSelection {
         get {
@@ -122,5 +124,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         notesModel = try container.decodeIfPresent(String.self, forKey: .notesModel)
         completedOnboardingVersion = try container.decodeIfPresent(Int.self, forKey: .completedOnboardingVersion) ?? 0
         onboardingStep = try container.decodeIfPresent(Int.self, forKey: .onboardingStep) ?? 0
+        reply = try container.decodeIfPresent(ReplySettings.self, forKey: .reply) ?? ReplySettings()
     }
 }
