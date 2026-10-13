@@ -32,6 +32,11 @@ struct ReplyView: View {
                     Label("Listening for your edit…", systemImage: "mic.fill").font(.caption).foregroundStyle(.red)
                 }
             }
+            if let to = reply.replyingTo {
+                Label(to, systemImage: "arrow.turn.down.right")
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .help("Who Claude is answering, from the draft. Select a message before you speak to pick it yourself.")
+            }
             if reply.needsScreenRecording {
                 HStack(spacing: 6) {
                     Text("Allow Screen Recording so Claude can see who said what.").font(.caption).foregroundStyle(.secondary)
@@ -92,6 +97,10 @@ struct ReplyView: View {
                     .help("Say a change to apply (⌘E), or hold the reply shortcut")
             }
             Spacer()
+            if reply.sessionCost > 0 {
+                Text(ReplyUsage.label(reply.sessionCost)).font(.caption).monospacedDigit().foregroundStyle(.tertiary)
+                    .help("What this reply has cost so far at \(reply.modelName)'s list price, including variants and edits")
+            }
             Text(reply.state == .generating ? "Esc to stop" : "Esc to close").font(.caption).foregroundStyle(.tertiary)
             Button("Paste") { reply.paste() }
                 .buttonStyle(.borderedProminent)

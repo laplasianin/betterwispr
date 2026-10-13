@@ -17,6 +17,10 @@ final class ReplyController {
     var draft = ""
     private(set) var appName = ""
     private(set) var windowTitle: String?
+    /// Who the model says it is answering, from the <TO> line of the last draft.
+    private(set) var replyingTo: String?
+    /// Everything this session's requests cost so far, in US dollars.
+    private(set) var sessionCost = 0.0
     /// A spoken edit is being recorded or recognized while the popup stays open.
     private(set) var isRecordingEdit = false { didSet { onChange?() } }
     /// Screenshots are on but macOS has not granted Screen Recording; the popup offers to ask.
@@ -143,13 +147,22 @@ final class ReplyController {
             let key = try ClaudeClient.keyStore.read(for: ClaudeClient.keyConnection) ?? ""
             let settings = model.settings.reply
             var text = ""
-            // Each element is the whole reply so far, so the popup fills in as Claude writes.
-            for try await partial in client.stream(to: pending, model: settings.model, effort: settings.effort, key: key) {
-                text = partial
-                draft = partial
+            // Each text element is the whole reply so far; the <TO> line is held back until complete and shown in the header.
+            for try await item in client.stream(to: pending, model: settings.model, effort: settings.effort, key: key) {
+                switch item {
+                case .text(let partial):
+                    let parts = ReplyPrompt.split(partial)
+                    guard !parts.pending else { continue }
+                    if let to = parts.to { replyingTo = to }
+                    text = parts.body
+                    draft = parts.body
+                case .usage(let usage):
+                    sessionCost += usage.cost(for: settings.model)
+                }
             }
             // A cancelled consumer ends the loop quietly; the partial text must not become a finished draft.
             try Task.checkCancellation()
+            guard !text.isEmpty else { throw ReplyError.emptyReply }
             request?.previousDrafts.append(text)
             draft = text
             lastModelDraft = text
@@ -198,8 +211,10 @@ final class ReplyController {
         guard state == .preview, !isRecordingEdit, !text.isEmpty, let pending = request else { return }
         let target = target
         let settings = model.settings
-        let instruction = ([pending.instruction] + pending.edits).joined(separator: " · ")
-        model.recordReply(text, instruction: instruction, modelName: "Reply · \(modelName)", duration: instructionDuration, appBundleID: target?.bundleIdentifier)
+        var instruction = ([pending.instruction] + pending.edits).joined(separator: " · ")
+        if let replyingTo { instruction += " (→ \(replyingTo))" }
+        model.recordReply(text, instruction: instruction, modelName: "Reply · \(modelName)", duration: instructionDuration,
+                          appBundleID: target?.bundleIdentifier, cost: sessionCost > 0 ? sessionCost : nil)
         reset()
         Task {
             // Let the panel close and the target's window take keyboard focus back before posting ⌘V.
@@ -272,6 +287,8 @@ final class ReplyController {
         lastModelDraft = ""
         target = nil
         instructionDuration = 0
+        replyingTo = nil
+        sessionCost = 0
         isRecordingEdit = false
         state = .idle
     }

@@ -80,6 +80,10 @@ struct TranscriptRow: View {
                 if expanded {
                     Text("·")
                     Text(transcript.modelName)
+                    if let cost = transcript.cost {
+                        Text("·")
+                        Text(ReplyUsage.label(cost)).monospacedDigit().help("At the model's list price, including variants and edits")
+                    }
                     Text("·")
                     Text(transcript.language == "auto" ? "Auto language" : transcript.language.uppercased())
                 }

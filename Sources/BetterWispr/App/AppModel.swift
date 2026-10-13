@@ -568,10 +568,10 @@ final class AppModel {
     }
 
     /// Adds a pasted reply to History when History is on; the spoken instruction is kept as its raw text.
-    func recordReply(_ text: String, instruction: String, modelName: String, duration: TimeInterval, appBundleID: String?) {
+    func recordReply(_ text: String, instruction: String, modelName: String, duration: TimeInterval, appBundleID: String?, cost: Double?) {
         guard settings.saveHistory else { return }
         history.insert(Transcript(text: text, rawText: instruction, duration: duration, modelName: modelName,
-                                  language: "auto", appBundleID: appBundleID), at: 0)
+                                  language: "auto", appBundleID: appBundleID, cost: cost), at: 0)
         do { try persist() } catch { statusMessage = "History could not be saved: \(error.localizedDescription)" }
     }
 

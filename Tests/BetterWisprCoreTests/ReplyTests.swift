@@ -208,7 +208,14 @@ import Testing
 
         probe.reset(script: [.status(529), .stream(["Sure, ", "Thursday ", "works."], stop: nil, error: nil)])
         var seen: [String] = []
-        for try await text in client.stream(to: request, model: .opus, effort: .low, key: "k") { seen.append(text) }
+        var usage: ReplyUsage?
+        for try await item in client.stream(to: request, model: .opus, effort: .low, key: "k") {
+            switch item {
+            case .text(let text): seen.append(text)
+            case .usage(let reported): usage = reported
+            }
+        }
+        #expect(usage == ReplyUsage(inputTokens: 1200, cacheReadTokens: 300, cacheWriteTokens: 0, outputTokens: 9))
         #expect(seen == ["Sure, ", "Sure, Thursday ", "Sure, Thursday works."])
         #expect(probe.requests.count == 2)
         #expect(probe.requests[1].body.contains(#""stream":true"#))
@@ -216,7 +223,7 @@ import Testing
         // The cleaned final text arrives as one more element only when cleaning changed something.
         probe.reset(script: [.stream(["\"Sure", ".\""], stop: nil, error: nil)])
         seen = []
-        for try await text in client.stream(to: request, model: .opus, effort: .low, key: "k") { seen.append(text) }
+        for try await item in client.stream(to: request, model: .opus, effort: .low, key: "k") { if case .text(let text) = item { seen.append(text) } }
         #expect(seen == ["\"Sure", "\"Sure.\"", "Sure."])
 
         probe.reset(script: [.stream(["Sure"], stop: "max_tokens", error: nil)])
@@ -283,7 +290,7 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
         case .truncated:
             (status, data) = (200, Data(#"{"content":[{"type":"thinking","thinking":""}],"stop_reason":"max_tokens"}"#.utf8))
         case .stream(let chunks, let stop, let error):
-            var lines = ["event: message_start", #"data: {"type":"message_start","message":{"id":"msg_1"}}"#, ""]
+            var lines = ["event: message_start", #"data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1200,"cache_read_input_tokens":300,"cache_creation_input_tokens":0,"output_tokens":1}}}"#, ""]
             for chunk in chunks {
                 let json = try! JSONSerialization.data(withJSONObject: ["type": "content_block_delta", "index": 0, "delta": ["type": "text_delta", "text": chunk]])
                 lines += ["event: content_block_delta", "data: " + String(decoding: json, as: UTF8.self), ""]
@@ -291,7 +298,7 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
             if let error {
                 lines += ["event: error", #"data: {"type":"error","error":{"type":"\#(error)","message":"Upstream says no"}}"#, ""]
             } else {
-                lines += ["event: message_delta", #"data: {"type":"message_delta","delta":{"stop_reason":"\#(stop ?? "end_turn")"}}"#, "", "event: message_stop", #"data: {"type":"message_stop"}"#, ""]
+                lines += ["event: message_delta", #"data: {"type":"message_delta","delta":{"stop_reason":"\#(stop ?? "end_turn")"},"usage":{"output_tokens":9}}"#, "", "event: message_stop", #"data: {"type":"message_stop"}"#, ""]
             }
             (status, data) = (200, Data(lines.joined(separator: "\n").utf8))
         }
@@ -350,9 +357,12 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
 @Test func claudeClientParsesStreamEvents() {
     #expect(ClaudeClient.event(fromDataLine: #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#) == .text("Hi"))
     #expect(ClaudeClient.event(fromDataLine: #"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}"#) == nil)
-    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#) == .stop("end_turn"))
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#) == .stop("end_turn", outputTokens: 12))
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_start","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":40,"cache_creation_input_tokens":60,"output_tokens":1}}}"#)
+            == .usage(ReplyUsage(inputTokens: 100, cacheReadTokens: 40, cacheWriteTokens: 60, outputTokens: 0)))
     #expect(ClaudeClient.event(fromDataLine: #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#) == .error(type: "overloaded_error", message: "Overloaded"))
     #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_start","message":{}}"#) == nil)
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_stop"}"#) == nil)
     #expect(ClaudeClient.event(fromDataLine: "not json") == nil)
 }
 
@@ -372,4 +382,30 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
     request.tone = nil
     #expect(!ReplyPrompt.userText(request).contains("<STYLE>"))
     for tone in StyleTone.allCases { #expect(!ReplyPrompt.description(of: tone).isEmpty) }
+}
+
+@Test func replyUsageCostsFollowEachModelsPrices() {
+    let usage = ReplyUsage(inputTokens: 1_000, cacheReadTokens: 2_000, cacheWriteTokens: 500, outputTokens: 100)
+    #expect(abs(usage.cost(for: .opus) - (0.004 + 0.0004 + 0.0025 + 0.002)) < 1e-9)
+    #expect(abs(usage.cost(for: .haiku) - (0.0001 + 0.00002 + 0.0000625 + 0.00005)) < 1e-9)
+    #expect((usage + ReplyUsage(inputTokens: 1, cacheReadTokens: 1, cacheWriteTokens: 1, outputTokens: 1))
+            == ReplyUsage(inputTokens: 1_001, cacheReadTokens: 2_001, cacheWriteTokens: 501, outputTokens: 101))
+    #expect(ReplyUsage.label(0.0064) == "$0.006")
+    #expect(ReplyUsage.label(0.00002) == "<$0.001")
+    #expect(ReplyUsage.label(0.12) == "$0.12")
+}
+
+@Test func replyPromptSplitsTheReplyingToLineFromTheBody() {
+    let full = ReplyPrompt.split("<TO>Alexey Zhokhov · «т.е. вот это по факту…»</TO>\n\nДа, но медленнее.")
+    #expect(full.to == "Alexey Zhokhov · «т.е. вот это по факту…»")
+    #expect(full.body == "Да, но медленнее.")
+    #expect(!full.pending)
+    #expect(ReplyPrompt.split("<TO>Alex").pending)
+    #expect(ReplyPrompt.split("<T").pending)
+    #expect(ReplyPrompt.split("<TO>Alex</TO>").body.isEmpty)
+    let plain = ReplyPrompt.split("Sure, Thursday works.")
+    #expect(plain.to == nil && plain.body == "Sure, Thursday works." && !plain.pending)
+    let body = ReplyPrompt.split("<TO>x</TO>\n\"Quoted\"")
+    #expect(body.body == "Quoted")
+    #expect(ReplyPrompt.split("").pending)
 }

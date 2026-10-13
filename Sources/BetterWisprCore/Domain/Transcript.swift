@@ -11,10 +11,12 @@ public struct Transcript: Codable, Identifiable, Equatable, Sendable {
     /// The app that received the dictation; nil for dictations saved before 0.1.1.
     public var appBundleID: String?
     public var vocabularyFixes: Int?
+    /// What a reply cost in US dollars at the model's list price; nil for dictations and for replies saved before 0.1.6.
+    public var cost: Double?
 
     public init(id: UUID = UUID(), createdAt: Date = .now, text: String, rawText: String,
                 duration: TimeInterval, modelName: String, language: String,
-                appBundleID: String? = nil, vocabularyFixes: Int? = nil) {
+                appBundleID: String? = nil, vocabularyFixes: Int? = nil, cost: Double? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.text = text
@@ -24,6 +26,7 @@ public struct Transcript: Codable, Identifiable, Equatable, Sendable {
         self.language = language
         self.appBundleID = appBundleID
         self.vocabularyFixes = vocabularyFixes
+        self.cost = cost
     }
 
     public var wordCount: Int { text.split(whereSeparator: \.isWhitespace).count }

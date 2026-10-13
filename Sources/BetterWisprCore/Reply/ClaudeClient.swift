@@ -73,13 +73,20 @@ public final class ClaudeClient: Sendable {
     /// One server-sent event from the streaming Messages API that reply mode cares about.
     public enum StreamEvent: Equatable, Sendable {
         case text(String)
-        case stop(String?)
+        case stop(String?, outputTokens: Int?)
+        case usage(ReplyUsage)
         case error(type: String, message: String)
     }
 
-    /// Streams the reply as it is written. Each element is the whole text so far; after the last chunk one more element
-    /// carries the cleaned final text when cleaning changed it. Retries once for a transient failure before any text arrived.
-    public func stream(to request: ReplyRequest, model: ClaudeModel, effort: ReplyEffort, key: String) -> AsyncThrowingStream<String, any Error> {
+    /// What `stream` delivers: the whole text so far after each chunk, and the request's token usage once it is known.
+    public enum StreamItem: Equatable, Sendable {
+        case text(String)
+        case usage(ReplyUsage)
+    }
+
+    /// Streams the reply as it is written. After the last chunk one more text element carries the cleaned final text
+    /// when cleaning changed it, then the usage. Retries once for a transient failure before any text arrived.
+    public func stream(to request: ReplyRequest, model: ClaudeModel, effort: ReplyEffort, key: String) -> AsyncThrowingStream<StreamItem, any Error> {
         AsyncThrowingStream { continuation in
             let producer = Task {
                 do {
@@ -88,18 +95,19 @@ public final class ClaudeClient: Sendable {
                     var body = request.body(model: model, effort: effort)
                     body["stream"] = true
                     let data = try JSONSerialization.data(withJSONObject: body)
-                    var received = ""
+                    var received = "", usage = ReplyUsage()
                     do {
-                        received = try await streamOnce(data, key: key) { received = $0; continuation.yield($0) }
+                        (received, usage) = try await streamOnce(data, key: key) { received = $0; continuation.yield(.text($0)) }
                     } catch let error as ReplyError where error.isTransient && received.isEmpty {
                         // Once text is on screen a retry could replace it with something else, so only a silent failure is retried.
                         try await Task.sleep(for: retryDelay)
                         try Task.checkCancellation()
-                        received = try await streamOnce(data, key: key) { received = $0; continuation.yield($0) }
+                        (received, usage) = try await streamOnce(data, key: key) { received = $0; continuation.yield(.text($0)) }
                     }
                     let final = Self.cleaned(received)
                     guard !final.isEmpty else { throw ReplyError.emptyReply }
-                    if final != received { continuation.yield(final) }
+                    if final != received { continuation.yield(.text(final)) }
+                    continuation.yield(.usage(usage))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -109,8 +117,8 @@ public final class ClaudeClient: Sendable {
         }
     }
 
-    /// Runs one streaming request, reporting the accumulated text after each chunk and returning it at the end.
-    private func streamOnce(_ body: Data, key: String, onText: (String) -> Void) async throws -> String {
+    /// Runs one streaming request, reporting the accumulated text after each chunk and returning it with the usage at the end.
+    private func streamOnce(_ body: Data, key: String, onText: (String) -> Void) async throws -> (text: String, usage: ReplyUsage) {
         let request = urlRequest(body, key: key)
         let bytes: URLSession.AsyncBytes, response: URLResponse
         do { (bytes, response) = try await session.bytes(for: request) }
@@ -125,7 +133,7 @@ public final class ClaudeClient: Sendable {
             try Self.checkStatus(data, status: http.statusCode)
             throw ReplyError.emptyReply
         }
-        var text = "", stop: String?
+        var text = "", stop: String?, usage = ReplyUsage()
         do {
             for try await line in bytes.lines {
                 guard line.hasPrefix("data: "), let event = Self.event(fromDataLine: String(line.dropFirst(6))) else { continue }
@@ -133,7 +141,10 @@ public final class ClaudeClient: Sendable {
                 case .text(let chunk):
                     text += chunk
                     onText(text)
-                case .stop(let reason): stop = reason
+                case .stop(let reason, let outputTokens):
+                    stop = reason
+                    if let outputTokens { usage.outputTokens = outputTokens }
+                case .usage(let reported): usage = reported
                 case .error(let type, let message): throw Self.streamFailure(type: type, message: message)
                 }
             }
@@ -143,7 +154,7 @@ public final class ClaudeClient: Sendable {
         switch stop {
         case "refusal": throw ReplyError.refused
         case "max_tokens": throw ReplyError.truncated
-        default: return text
+        default: return (text, usage)
         }
     }
 
@@ -166,7 +177,13 @@ public final class ClaudeClient: Sendable {
             guard let delta = object["delta"] as? [String: Any], delta["type"] as? String == "text_delta", let text = delta["text"] as? String else { return nil }
             return .text(text)
         case "message_delta":
-            return .stop((object["delta"] as? [String: Any])?["stop_reason"] as? String)
+            return .stop((object["delta"] as? [String: Any])?["stop_reason"] as? String,
+                         outputTokens: (object["usage"] as? [String: Any])?["output_tokens"] as? Int)
+        case "message_start":
+            // The input side of the bill is known before any text; output tokens arrive with message_delta.
+            guard let usage = (object["message"] as? [String: Any])?["usage"] as? [String: Any] else { return nil }
+            return .usage(ReplyUsage(inputTokens: usage["input_tokens"] as? Int ?? 0, cacheReadTokens: usage["cache_read_input_tokens"] as? Int ?? 0,
+                                     cacheWriteTokens: usage["cache_creation_input_tokens"] as? Int ?? 0, outputTokens: 0))
         case "error":
             let detail = object["error"] as? [String: Any]
             return .error(type: detail?["type"] as? String ?? "error", message: detail?["message"] as? String ?? "Unknown error")
