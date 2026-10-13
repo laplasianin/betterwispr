@@ -4,6 +4,14 @@ All notable changes to BetterWispr are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/). The current version lives in `VERSION`.
 
+## [Unreleased]
+
+### Added
+- Reply with Claude. Hold ⌥⇧ Space in a chat, an email or any text field, say what to reply, and Claude writes it from a screenshot and the window's text, in the conversation's language. The draft opens in a popup where you can edit it, press ⌘R for another variant, or ⌘E (or hold the shortcut again) to say a change such as "add good night at the end". Return pastes the draft; it is never sent for you. Set the shortcut, your Anthropic API key, the model (Opus 5.5, Sonnet 5.5 or Haiku 5.5), the effort and whether a screenshot goes along under Settings → Reply with Claude. The key stays in the Keychain, and nothing is sent until you use the shortcut.
+
+### Fixed
+- A second global shortcut no longer triggers the first: each Carbon hot key now checks its own id.
+
 ## [0.1.5] - 2026-10-12
 
 ### Added

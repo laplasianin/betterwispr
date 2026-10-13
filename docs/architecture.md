@@ -96,6 +96,31 @@ not publish stale text or paste a result from a prior session. Keep these
 invariants when changing the implementation; the manual checklist covers OS
 behavior that unit tests cannot establish.
 
+## Reply flow
+
+Reply mode is a second `GlobalShortcut` (hot-key id 2) owned by `AppModel`.
+`ReplyController` in `App/` runs one session; `Core/Reply/` holds the request
+body, the prompt and the Claude client; `Core/Integrations/WindowSnapshot.swift`
+takes the screenshot.
+
+1. The reply shortcut calls `AppModel.startRecording(held:reply: true)`. The
+   recorder, capsule and `isBusy` guards are the dictation ones, with `replyMode`
+   set, so Option–Space is ignored while a reply records. `ReplyController.beginCapture`
+   starts `DictationContext.capture` (Accessibility text; OCR only when the
+   screenshot is off) and `WindowSnapshot.capture` (JPEG, long edge ≤ 1920 px).
+2. On release, `AppModel.finishRecording` hands the `DictationRecording` to
+   `ReplyController.recordingFinished`, which calls `AppModel.recognize` (the
+   same provider and light cleanup dictation uses) and builds a `ReplyRequest`.
+3. `ClaudeClient` posts to the Messages API with `x-api-key` from the Keychain
+   (`com.betterwispr.claude-reply`), one retry for 429/5xx/timeouts, 30 s limit.
+   `stop_reason` `refusal` and `max_tokens` become `ReplyError`s.
+4. `ReplyPanelController` shows the draft in a nonactivating `NSPanel` that can
+   become key, so the target app stays frontmost. Return pastes through
+   `FocusedAppIntegration` after the panel closes; Escape pastes nothing. Spoken
+   edits record through the same `startRecording(reply: true)` path while the
+   popup stays open; `ReplyRequest.action` tells the model whether to compose,
+   regenerate, rework a hand-edited draft or apply edits.
+
 ## Meeting notes flow
 
 `MeetingModel` owns meetings and is separate from dictation. It loads its own

@@ -996,3 +996,25 @@ were not exercised in this UI pass.
 - [ ] Separate language/accent/device groups and latency measurements. Record
   settings and model hashes; do not report another project's paper numbers as
   BetterWispr results.
+
+## Reply mode checklist
+
+Needs a Claude API key in Settings → Reply, Accessibility and Screen Recording.
+
+- [ ] Telegram one-to-one chat in Russian: hold ⌥⇧ Space, "ответь ему, что
+  завтра не смогу". The draft is Russian, addressed to the other person, and
+  Return pastes it into the input field without sending.
+- [ ] Slack thread with several people, English: the draft addresses the right
+  person and does not speak as another participant.
+- [ ] Gmail with an email open: the draft replies to that email in its language.
+- [ ] Two spoken edits in a row (⌘E or holding ⌥⇧ Space in the popup): both
+  are reflected.
+- [ ] Edit a word by hand, then ⌘R: the change survives in the new draft.
+- [ ] Escape: nothing pasted, clipboard unchanged.
+- [ ] ⌥ Space during a reply recording does nothing; ⌥ Space while the popup
+  is open starts ordinary dictation.
+- [ ] Each shortcut triggers only its own mode.
+- [ ] No key, a wrong key, and offline each show their own message in the popup;
+  Retry works after reconnecting.
+- [ ] Screen Recording denied: the draft still arrives from window text.
+- [ ] Quit the target app before Return: toast says the draft was copied.
