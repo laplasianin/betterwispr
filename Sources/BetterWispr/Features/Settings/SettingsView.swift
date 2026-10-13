@@ -32,7 +32,7 @@ struct SettingsView: View {
                 }
 
                 SettingsSection("Shortcut") {
-                    ShortcutRecorder(model: model)
+                    ShortcutRecorder(model: model, shortcut: model.settings.shortcut) { model.changeShortcut($0) }
                     RowDivider()
                     SettingRow("Behavior", caption: model.settings.dictationMode == .hold
                         ? "Hold to speak and release to finish. A quick tap starts hands-free dictation."
@@ -47,6 +47,8 @@ struct SettingsView: View {
                         .disabled(model.isBusy)
                     }
                 }
+
+                ReplySettingsSection(model: model)
 
                 SettingsSection("Microphone and language") {
                     SettingRow("Microphone", caption: (model.settings.microphone == nil ? "Follows your Sound settings." : "Used whenever it’s connected.")
@@ -176,28 +178,32 @@ struct SettingsView: View {
     }
 }
 
-private struct ShortcutRecorder: View {
+struct ShortcutRecorder: View {
     let model: AppModel
+    var title = "Keyboard shortcut"
+    let shortcut: DictationShortcut
+    var defaultShortcut: DictationShortcut = .optionSpace
+    var idleCaption = "Starts dictation from any app."
+    let change: (DictationShortcut) -> Void
     @State private var monitor: Any?
     @State private var held: ShortcutModifiers = []
     @State private var modifierCandidate: DictationShortcut?
     @State private var feedback: String?
 
     private var isCapturing: Bool { monitor != nil }
-    private var shortcut: DictationShortcut { model.settings.shortcut }
 
     var body: some View {
-        SettingRow("Keyboard shortcut", caption: caption) {
+        SettingRow(title, caption: caption) {
             HStack(spacing: 6) {
-                if shortcut != .optionSpace, !isCapturing {
-                    Button("Reset to \(DictationShortcut.optionSpace.spokenName)", systemImage: "arrow.counterclockwise") {
+                if shortcut != defaultShortcut, !isCapturing {
+                    Button("Reset to \(defaultShortcut.spokenName)", systemImage: "arrow.counterclockwise") {
                         stop()
-                        model.changeShortcut(.optionSpace)
+                        change(defaultShortcut)
                     }
                     .labelStyle(.iconOnly)
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
-                    .help("Reset to \(DictationShortcut.optionSpace.displayName)")
+                    .help("Reset to \(defaultShortcut.displayName)")
                     .transition(.opacity)
                 }
                 recordButton
@@ -214,7 +220,7 @@ private struct ShortcutRecorder: View {
 
     private var caption: String? {
         if isCapturing { return feedback ?? "Press and release ⌃, ⌥, ⇧ or ⌘ alone, use a key combination, or press an F-key. Esc cancels." }
-        return shortcut.isModifierOnly ? "Needs Accessibility. Uses the left or right key you recorded." : "Starts dictation from any app."
+        return shortcut.isModifierOnly ? "Needs Accessibility. Uses the left or right key you recorded." : idleCaption
     }
 
     @ViewBuilder private var recordButton: some View {
@@ -260,13 +266,13 @@ private struct ShortcutRecorder: View {
                                    : "\(pressed) is for typing, so it can’t start dictation. Hold ⌃, ⌥ or ⌘ with it."
             return NSSound.beep()
         }
-        model.changeShortcut(shortcut)
+        change(shortcut)
         stop()
     }
 
     private func modifiersChanged(to modifiers: ShortcutModifiers, keyCode: Int) {
         if let candidate = modifierCandidate, candidate.keyCode == UInt32(keyCode), modifiers.isEmpty {
-            model.changeShortcut(candidate)
+            change(candidate)
             return stop()
         }
         modifierCandidate = nil
