@@ -134,7 +134,7 @@ private struct WritingModeEditor: View {
                     Text("Writing")
                 } footer: {
                     Text((mode.cleanup ?? model.settings.cleanup) == .medium
-                         ? "Instructions go to your notes model with each Medium dictation in this mode. Screen context is read when you start dictating, so it follows this mode’s apps and websites, and a trigger word can turn it off but not on. It sends nearby text to your notes model, which may be a cloud service\(model.settings.recognizeScreenText ? ", and reads the window from a screenshot because Read window text from the screen is on" : "")."
+                         ? "Instructions go to your notes model with each Medium dictation in this mode, and to Claude with each reply in it. Screen context is read when you start dictating, so it follows this mode’s apps and websites, and a trigger word can turn it off but not on. It sends nearby text to your notes model, which may be a cloud service\(model.settings.recognizeScreenText ? ", and reads the window from a screenshot because Read window text from the screen is on" : "")."
                          : "Choose Medium cleanup to add instructions for your notes model.")
                 }
 

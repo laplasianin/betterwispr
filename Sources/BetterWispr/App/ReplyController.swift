@@ -108,6 +108,9 @@ final class ReplyController {
         request = ReplyRequest(instruction: instruction, windowText: context?.window, selectedText: context?.selectedText,
                                windowTitle: windowTitle, screenshot: screenshot,
                                userName: model.settings.reply.userName, appName: recording.target?.localizedName ?? appName)
+        // The writing mode for this app or website, and the tone set for the app's category, shape the reply like they shape dictation.
+        request?.styleInstructions = recording.mode?.instructions
+        request?.tone = recording.mode?.tone ?? recording.settings.styles[AppCategory(bundleID: recording.target?.bundleIdentifier).style]
         Logger(subsystem: "org.betterwispr.app", category: "Reply")
             .notice("Reply context: window text \(context?.window?.count ?? 0, privacy: .public) chars, selection \(context?.selectedText?.count ?? 0, privacy: .public) chars, screenshot \(screenshot?.count ?? 0, privacy: .public) bytes")
         // Without any view of the window the model can only guess; say so instead of spending a request on a guess.

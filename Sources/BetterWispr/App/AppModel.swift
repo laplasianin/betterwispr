@@ -329,8 +329,8 @@ final class AppModel {
         targetApplication = NSWorkspace.shared.frontmostApplication
         replyMode = reply
         let modes = settings.modes
-        let website = reply || !modes.needsWebsite ? nil : targetApplication.flatMap(WebsiteReader.read)
-        writingMode = reply ? nil : modes.match(app: targetApplication?.bundleIdentifier)?.mode
+        let website = modes.needsWebsite ? targetApplication.flatMap(WebsiteReader.read) : nil
+        writingMode = modes.match(app: targetApplication?.bundleIdentifier)?.mode
         dictationContext?.cancel()
         dictationContext = reply || website != nil ? nil : captureContext(for: settings.applying(writingMode))
         if reply { self.reply.beginCapture(target: targetApplication) }
@@ -373,7 +373,7 @@ final class AppModel {
                 guard self.generation == token else { return }
                 if let url, let app = self.targetApplication {
                     self.writingMode = modes.match(url: url, app: app.bundleIdentifier)?.mode
-                    self.dictationContext = self.captureContext(for: self.settings.applying(self.writingMode))
+                    if !reply { self.dictationContext = self.captureContext(for: self.settings.applying(self.writingMode)) }
                 }
                 self.microphoneGranted = true
                 self.phase = .recording

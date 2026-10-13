@@ -21,6 +21,10 @@ public struct ReplyRequest: Equatable, Sendable {
     public var screenshot: Data?
     public var userName: String
     public var appName: String
+    /// A writing mode's instructions for the target app or website, when one matches.
+    public var styleInstructions: String?
+    /// The tone the user set for this app's category or in the matching mode; nil lets the model follow the conversation.
+    public var tone: StyleTone?
     public var draft: String?
     public var previousDrafts: [String] = []
     public var edits: [String] = []

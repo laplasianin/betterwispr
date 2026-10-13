@@ -356,3 +356,20 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
     #expect(ClaudeClient.event(fromDataLine: "not json") == nil)
 }
 
+
+@Test func replyPromptCarriesTheWritingModeStyle() {
+    var request = ReplyRequest(instruction: "tell him I agree", windowText: "hi", selectedText: nil, windowTitle: nil,
+                               screenshot: nil, userName: "", appName: "Slack")
+    #expect(!ReplyPrompt.userText(request).contains("<STYLE>"))
+    request.styleInstructions = "Use British spelling. Sign off with “Cheers”."
+    request.tone = .veryCasual
+    let text = ReplyPrompt.userText(request)
+    #expect(text.contains("<STYLE>\n"))
+    #expect(text.contains(ReplyPrompt.description(of: .veryCasual)))
+    #expect(text.contains("Use British spelling. Sign off with “Cheers”."))
+    #expect(text.range(of: "<STYLE>")!.lowerBound < text.range(of: "<INSTRUCTION>")!.lowerBound)
+    request.styleInstructions = "  "
+    request.tone = nil
+    #expect(!ReplyPrompt.userText(request).contains("<STYLE>"))
+    for tone in StyleTone.allCases { #expect(!ReplyPrompt.description(of: tone).isEmpty) }
+}

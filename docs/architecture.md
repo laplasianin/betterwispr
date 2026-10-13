@@ -111,6 +111,9 @@ takes the screenshot.
 2. On release, `AppModel.finishRecording` hands the `DictationRecording` to
    `ReplyController.recordingFinished`, which calls `AppModel.recognize` (the
    same provider and light cleanup dictation uses) and builds a `ReplyRequest`.
+   The writing mode matched for the app or website (never by trigger word) adds
+   its instructions and tone, and an explicitly set category tone adds itself,
+   as a `<STYLE>` section of the prompt.
 3. `ClaudeClient` posts to the Messages API with `x-api-key` from the Keychain
    (`com.betterwispr.claude-reply`), one retry for 429/5xx/timeouts, 30 s limit.
    `stop_reason` `refusal` and `max_tokens` become `ReplyError`s.
