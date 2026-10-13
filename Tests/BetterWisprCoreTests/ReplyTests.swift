@@ -140,66 +140,111 @@ import Testing
     #expect(throws: ReplyError.badRequest("HTTP 418")) { try ClaudeClient.parse(Data("teapot".utf8), status: 418) }
 }
 
-@Test func claudeClientSendsHeadersRetriesTransientFailuresAndTimesOut() async throws {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [ClaudeEndpointStub.self]
-    let client = ClaudeClient(configuration: configuration, retryDelay: .zero)
-    let request = ReplyRequest(instruction: "tell him I agree", windowText: nil, selectedText: nil, windowTitle: nil,
-                               screenshot: nil, userName: "", appName: "Telegram")
+// Both tests script the same URLProtocol stub, so they must not run at the same time.
+@Suite(.serialized) struct ClaudeClientNetworkTests {
+    @Test func claudeClientSendsHeadersRetriesTransientFailuresAndTimesOut() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ClaudeEndpointStub.self]
+        let client = ClaudeClient(configuration: configuration, retryDelay: .zero)
+        let request = ReplyRequest(instruction: "tell him I agree", windowText: nil, selectedText: nil, windowTitle: nil,
+                                   screenshot: nil, userName: "", appName: "Telegram")
 
-    let probe = ClaudeEndpointStub.probe
-    probe.reset(script: [.reply("Sure, Thursday works.")])
-    #expect(try await client.reply(to: request, model: .opus, effort: .low, key: " sk-ant-test\n") == "Sure, Thursday works.")
-    var sent = probe.requests
-    #expect(sent.count == 1)
-    #expect(sent[0].url == "https://api.anthropic.com/v1/messages")
-    #expect(sent[0].headers["x-api-key"] == "sk-ant-test")
-    #expect(sent[0].headers["anthropic-version"] == "2023-06-01")
-    #expect(sent[0].headers["content-type"] == "application/json")
-    #expect(sent[0].body.contains(#""model":"claude-opus-5-5""#))
-    #expect(sent[0].body.contains("tell him I agree"))
+        let probe = ClaudeEndpointStub.probe
+        probe.reset(script: [.reply("Sure, Thursday works.")])
+        #expect(try await client.reply(to: request, model: .opus, effort: .low, key: " sk-ant-test\n") == "Sure, Thursday works.")
+        var sent = probe.requests
+        #expect(sent.count == 1)
+        #expect(sent[0].url == "https://api.anthropic.com/v1/messages")
+        #expect(sent[0].headers["x-api-key"] == "sk-ant-test")
+        #expect(sent[0].headers["anthropic-version"] == "2023-06-01")
+        #expect(sent[0].headers["content-type"] == "application/json")
+        #expect(sent[0].body.contains(#""model":"claude-opus-5-5""#))
+        #expect(sent[0].body.contains("tell him I agree"))
 
-    probe.reset(script: [.status(429), .reply("After retry")])
-    #expect(try await client.reply(to: request, model: .opus, effort: .low, key: "k") == "After retry")
-    #expect(probe.requests.count == 2)
+        probe.reset(script: [.status(429), .reply("After retry")])
+        #expect(try await client.reply(to: request, model: .opus, effort: .low, key: "k") == "After retry")
+        #expect(probe.requests.count == 2)
 
-    probe.reset(script: [.status(500), .status(503)])
-    await #expect(throws: ReplyError.server(503)) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
-    #expect(probe.requests.count == 2)
+        probe.reset(script: [.status(500), .status(503)])
+        await #expect(throws: ReplyError.server(503)) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
+        #expect(probe.requests.count == 2)
 
-    probe.reset(script: [.status(401)])
-    await #expect(throws: ReplyError.invalidKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
-    #expect(probe.requests.count == 1)
+        probe.reset(script: [.status(401)])
+        await #expect(throws: ReplyError.invalidKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
+        #expect(probe.requests.count == 1)
 
-    probe.reset(script: [.reply("ignored")])
-    await #expect(throws: ReplyError.missingKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "") }
-    #expect(probe.requests.isEmpty)
+        probe.reset(script: [.reply("ignored")])
+        await #expect(throws: ReplyError.missingKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "") }
+        #expect(probe.requests.isEmpty)
 
-    var empty = request
-    empty.instruction = " \n"
-    await #expect(throws: ReplyError.emptyInstruction) { try await client.reply(to: empty, model: .opus, effort: .low, key: "k") }
-    #expect(probe.requests.isEmpty)
+        var empty = request
+        empty.instruction = " \n"
+        await #expect(throws: ReplyError.emptyInstruction) { try await client.reply(to: empty, model: .opus, effort: .low, key: "k") }
+        #expect(probe.requests.isEmpty)
 
-    // A timeout is transient, so the client tries twice; both attempts must hang for the error to surface.
-    probe.reset(script: [.timeout, .timeout])
-    let quick = ClaudeClient(configuration: configuration, retryDelay: .zero, timeout: 0.2)
-    await #expect(throws: ReplyError.timedOut) { try await quick.reply(to: request, model: .opus, effort: .low, key: "k") }
-    #expect(probe.requests.count == 2)
+        // A timeout is transient, so the client tries twice; both attempts must hang for the error to surface.
+        probe.reset(script: [.timeout, .timeout])
+        let quick = ClaudeClient(configuration: configuration, retryDelay: .zero, timeout: 0.2)
+        await #expect(throws: ReplyError.timedOut) { try await quick.reply(to: request, model: .opus, effort: .low, key: "k") }
+        #expect(probe.requests.count == 2)
 
-    // Thinking shares max_tokens, so a key check must pass even when the model never reaches its text.
-    probe.reset(script: [.truncated])
-    try await client.verify(key: "k", model: .haiku)
-    sent = probe.requests
-    #expect(sent[0].body.contains(#""model":"claude-haiku-5-5""#))
-    #expect(sent[0].body.contains(#""effort":"low""#))
-    probe.reset(script: [.status(401)])
-    await #expect(throws: ReplyError.invalidKey) { try await client.verify(key: "k", model: .haiku) }
+        // Thinking shares max_tokens, so a key check must pass even when the model never reaches its text.
+        probe.reset(script: [.truncated])
+        try await client.verify(key: "k", model: .haiku)
+        sent = probe.requests
+        #expect(sent[0].body.contains(#""model":"claude-haiku-5-5""#))
+        #expect(sent[0].body.contains(#""effort":"low""#))
+        probe.reset(script: [.status(401)])
+        await #expect(throws: ReplyError.invalidKey) { try await client.verify(key: "k", model: .haiku) }
+    }
+
+    @Test func claudeClientStreamsTextRetriesOnlyBeforeTheFirstChunkAndWarmsUpWithoutAKey() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [ClaudeEndpointStub.self]
+        let client = ClaudeClient(configuration: configuration, retryDelay: .zero)
+        let request = ReplyRequest(instruction: "tell him I agree", windowText: nil, selectedText: nil, windowTitle: nil,
+                                   screenshot: nil, userName: "", appName: "Telegram")
+        let probe = ClaudeEndpointStub.probe
+
+        probe.reset(script: [.status(529), .stream(["Sure, ", "Thursday ", "works."], stop: nil, error: nil)])
+        var seen: [String] = []
+        for try await text in client.stream(to: request, model: .opus, effort: .low, key: "k") { seen.append(text) }
+        #expect(seen == ["Sure, ", "Sure, Thursday ", "Sure, Thursday works."])
+        #expect(probe.requests.count == 2)
+        #expect(probe.requests[1].body.contains(#""stream":true"#))
+
+        // The cleaned final text arrives as one more element only when cleaning changed something.
+        probe.reset(script: [.stream(["\"Sure", ".\""], stop: nil, error: nil)])
+        seen = []
+        for try await text in client.stream(to: request, model: .opus, effort: .low, key: "k") { seen.append(text) }
+        #expect(seen == ["\"Sure", "\"Sure.\"", "Sure."])
+
+        probe.reset(script: [.stream(["Sure"], stop: "max_tokens", error: nil)])
+        await #expect(throws: ReplyError.truncated) { for try await _ in client.stream(to: request, model: .opus, effort: .low, key: "k") {} }
+        probe.reset(script: [.stream([], stop: "refusal", error: nil)])
+        await #expect(throws: ReplyError.refused) { for try await _ in client.stream(to: request, model: .opus, effort: .low, key: "k") {} }
+
+        // A failure after text already streamed is not retried: the user has seen part of a reply that would change.
+        probe.reset(script: [.stream(["Sure"], stop: nil, error: "overloaded_error"), .stream(["ignored"], stop: nil, error: nil)])
+        await #expect(throws: ReplyError.server(529)) { for try await _ in client.stream(to: request, model: .opus, effort: .low, key: "k") {} }
+        #expect(probe.requests.count == 1)
+        probe.reset(script: [.stream([], stop: nil, error: "authentication_error")])
+        await #expect(throws: ReplyError.invalidKey) { for try await _ in client.stream(to: request, model: .opus, effort: .low, key: "k") {} }
+
+        probe.reset(script: [.status(401)])
+        client.warmUp()
+        for _ in 0..<40 where probe.requests.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
+        let warm = try #require(probe.requests.first)
+        #expect(warm.method == "GET")
+        #expect(warm.headers["x-api-key"] == nil)
+        #expect(warm.body.isEmpty)
+    }
 }
 
 /// Records requests and plays a scripted answer for each; a lock keeps it safe from URLSession's threads.
 final class ClaudeRequestProbe: @unchecked Sendable {
-    struct Request: Sendable { let url: String; let headers: [String: String]; let body: String }
-    enum Step: Sendable { case reply(String), status(Int), timeout, truncated }
+    struct Request: Sendable { let url: String; let method: String; let headers: [String: String]; let body: String }
+    enum Step: Sendable { case reply(String), status(Int), timeout, truncated, stream([String], stop: String?, error: String?) }
     private let lock = NSLock()
     private var recorded: [Request] = []
     private var script: [Step] = []
@@ -228,7 +273,7 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
             }
         }
         let headers = (request.allHTTPHeaderFields ?? [:]).reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value }
-        let step = Self.probe.record(.init(url: request.url!.absoluteString, headers: headers, body: String(decoding: body, as: UTF8.self)))
+        let step = Self.probe.record(.init(url: request.url!.absoluteString, method: request.httpMethod ?? "GET", headers: headers, body: String(decoding: body, as: UTF8.self)))
         let status: Int, data: Data
         switch step {
         case .timeout: return
@@ -237,6 +282,18 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
             (status, data) = (200, try! JSONSerialization.data(withJSONObject: ["content": [["type": "text", "text": text]], "stop_reason": "end_turn"]))
         case .truncated:
             (status, data) = (200, Data(#"{"content":[{"type":"thinking","thinking":""}],"stop_reason":"max_tokens"}"#.utf8))
+        case .stream(let chunks, let stop, let error):
+            var lines = ["event: message_start", #"data: {"type":"message_start","message":{"id":"msg_1"}}"#, ""]
+            for chunk in chunks {
+                let json = try! JSONSerialization.data(withJSONObject: ["type": "content_block_delta", "index": 0, "delta": ["type": "text_delta", "text": chunk]])
+                lines += ["event: content_block_delta", "data: " + String(decoding: json, as: UTF8.self), ""]
+            }
+            if let error {
+                lines += ["event: error", #"data: {"type":"error","error":{"type":"\#(error)","message":"Upstream says no"}}"#, ""]
+            } else {
+                lines += ["event: message_delta", #"data: {"type":"message_delta","delta":{"stop_reason":"\#(stop ?? "end_turn")"}}"#, "", "event: message_stop", #"data: {"type":"message_stop"}"#, ""]
+            }
+            (status, data) = (200, Data(lines.joined(separator: "\n").utf8))
         }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
@@ -289,3 +346,13 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
     #expect(reply.state == .preview)
     #expect(reply.draft == "Sure, Thursday works.")
 }
+
+@Test func claudeClientParsesStreamEvents() {
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#) == .text("Hi"))
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}"#) == nil)
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}"#) == .stop("end_turn"))
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#) == .error(type: "overloaded_error", message: "Overloaded"))
+    #expect(ClaudeClient.event(fromDataLine: #"{"type":"message_start","message":{}}"#) == nil)
+    #expect(ClaudeClient.event(fromDataLine: "not json") == nil)
+}
+

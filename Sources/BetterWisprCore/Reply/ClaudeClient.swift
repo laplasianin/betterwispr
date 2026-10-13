@@ -58,6 +58,133 @@ public final class ClaudeClient: Sendable {
         _ = try await send(body, key: key, requiringText: false)
     }
 
+    /// Opens a connection to the API ahead of a request so the TLS handshake is done by the time the reply is ready.
+    /// Sends no key and no data; the 401 it gets back is the point.
+    public func warmUp() {
+        Task {
+            var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+            request.httpMethod = "GET"
+            _ = try? await session.data(for: request)
+        }
+    }
+
+    // MARK: Streaming
+
+    /// One server-sent event from the streaming Messages API that reply mode cares about.
+    public enum StreamEvent: Equatable, Sendable {
+        case text(String)
+        case stop(String?)
+        case error(type: String, message: String)
+    }
+
+    /// Streams the reply as it is written. Each element is the whole text so far; after the last chunk one more element
+    /// carries the cleaned final text when cleaning changed it. Retries once for a transient failure before any text arrived.
+    public func stream(to request: ReplyRequest, model: ClaudeModel, effort: ReplyEffort, key: String) -> AsyncThrowingStream<String, any Error> {
+        AsyncThrowingStream { continuation in
+            let producer = Task {
+                do {
+                    guard !request.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ReplyError.emptyInstruction }
+                    let key = try Self.normalizedKey(key)
+                    var body = request.body(model: model, effort: effort)
+                    body["stream"] = true
+                    let data = try JSONSerialization.data(withJSONObject: body)
+                    var received = ""
+                    do {
+                        received = try await streamOnce(data, key: key) { received = $0; continuation.yield($0) }
+                    } catch let error as ReplyError where error.isTransient && received.isEmpty {
+                        // Once text is on screen a retry could replace it with something else, so only a silent failure is retried.
+                        try await Task.sleep(for: retryDelay)
+                        try Task.checkCancellation()
+                        received = try await streamOnce(data, key: key) { received = $0; continuation.yield($0) }
+                    }
+                    let final = Self.cleaned(received)
+                    guard !final.isEmpty else { throw ReplyError.emptyReply }
+                    if final != received { continuation.yield(final) }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in producer.cancel() }
+        }
+    }
+
+    /// Runs one streaming request, reporting the accumulated text after each chunk and returning it at the end.
+    private func streamOnce(_ body: Data, key: String, onText: (String) -> Void) async throws -> String {
+        let request = urlRequest(body, key: key)
+        let bytes: URLSession.AsyncBytes, response: URLResponse
+        do { (bytes, response) = try await session.bytes(for: request) }
+        catch let error as URLError where error.code == .timedOut { throw ReplyError.timedOut }
+        catch let error as URLError where error.code == .cancelled { throw CancellationError() }
+        catch is CancellationError { throw CancellationError() }
+        catch { throw ReplyError.network(error.localizedDescription) }
+        guard let http = response as? HTTPURLResponse else { throw ReplyError.emptyReply }
+        guard (200..<300).contains(http.statusCode) else {
+            var data = Data()
+            for try await byte in bytes { data.append(byte) }
+            try Self.checkStatus(data, status: http.statusCode)
+            throw ReplyError.emptyReply
+        }
+        var text = "", stop: String?
+        do {
+            for try await line in bytes.lines {
+                guard line.hasPrefix("data: "), let event = Self.event(fromDataLine: String(line.dropFirst(6))) else { continue }
+                switch event {
+                case .text(let chunk):
+                    text += chunk
+                    onText(text)
+                case .stop(let reason): stop = reason
+                case .error(let type, let message): throw Self.streamFailure(type: type, message: message)
+                }
+            }
+        } catch let error as URLError where error.code == .cancelled { throw CancellationError() }
+        catch let error as URLError where text.isEmpty { throw error.code == .timedOut ? ReplyError.timedOut : ReplyError.network(error.localizedDescription) }
+        catch let error as URLError { throw ReplyError.badRequest(error.localizedDescription) }
+        switch stop {
+        case "refusal": throw ReplyError.refused
+        case "max_tokens": throw ReplyError.truncated
+        default: return text
+        }
+    }
+
+    /// Maps an in-stream error event to the same errors a failed HTTP status produces.
+    private static func streamFailure(type: String, message: String) -> ReplyError {
+        switch type {
+        case "authentication_error", "permission_error": .invalidKey
+        case "rate_limit_error": .rateLimited
+        case "overloaded_error": .server(529)
+        case "api_error": .server(500)
+        default: .badRequest(message)
+        }
+    }
+
+    /// Decodes the JSON after `data: ` on one SSE line; nil for events reply mode ignores or lines that are not JSON.
+    public static func event(fromDataLine line: String) -> StreamEvent? {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any], let type = object["type"] as? String else { return nil }
+        switch type {
+        case "content_block_delta":
+            guard let delta = object["delta"] as? [String: Any], delta["type"] as? String == "text_delta", let text = delta["text"] as? String else { return nil }
+            return .text(text)
+        case "message_delta":
+            return .stop((object["delta"] as? [String: Any])?["stop_reason"] as? String)
+        case "error":
+            let detail = object["error"] as? [String: Any]
+            return .error(type: detail?["type"] as? String ?? "error", message: detail?["message"] as? String ?? "Unknown error")
+        default:
+            return nil
+        }
+    }
+
+    private func urlRequest(_ body: Data, key: String) -> URLRequest {
+        var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue(key, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        return request
+    }
+
     private func send(_ body: Data, key: String, requiringText: Bool = true) async throws -> String {
         do { return try await once(body, key: key, requiringText: requiringText) }
         catch let error as ReplyError where error.isTransient {
@@ -68,12 +195,7 @@ public final class ClaudeClient: Sendable {
     }
 
     private func once(_ body: Data, key: String, requiringText: Bool) async throws -> String {
-        var request = URLRequest(url: Self.endpoint, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue(key, forHTTPHeaderField: "x-api-key")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        let request = urlRequest(body, key: key)
         let data: Data, response: URLResponse
         do { (data, response) = try await session.data(for: request) }
         catch let error as URLError where error.code == .timedOut { throw ReplyError.timedOut }

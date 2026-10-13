@@ -43,7 +43,7 @@ struct ReplyView: View {
 
     @ViewBuilder private var content: some View {
         switch reply.state {
-        case .generating:
+        case .generating where reply.draft.isEmpty:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Writing with \(reply.modelName)…").foregroundStyle(.secondary)
@@ -62,7 +62,8 @@ struct ReplyView: View {
                 }
             }
             .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
-        case .preview, .idle:
+        case .generating, .preview, .idle:
+            // While streaming, the text grows in place and becomes editable once the reply is complete.
             TextEditor(text: $reply.draft)
                 .font(.body)
                 .scrollContentBackground(.hidden)
@@ -70,6 +71,8 @@ struct ReplyView: View {
                 .frame(minHeight: 96, maxHeight: 260)
                 .background(.background.opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
                 .focused($editing)
+                .disabled(reply.state == .generating)
+                .opacity(reply.state == .generating ? 0.85 : 1)
         }
     }
 

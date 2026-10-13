@@ -49,6 +49,8 @@ final class ReplyController {
             screenshot = settings.reply.sendScreenshot ? target.map { WindowSnapshot.capture(from: $0) } : nil
             needsScreenRecording = settings.reply.sendScreenshot && !CGPreflightScreenCaptureAccess()
             appName = target?.localizedName ?? "your app"
+            // The handshake with the API runs while the user is still speaking.
+            client.warmUp()
         } else {
             isRecordingEdit = true
         }
@@ -117,10 +119,18 @@ final class ReplyController {
     private func generate() async {
         guard let pending = request, !Task.isCancelled else { return }
         state = .generating
+        draft = ""
         do {
             let key = try ClaudeClient.keyStore.read(for: ClaudeClient.keyConnection) ?? ""
             let settings = model.settings.reply
-            let text = try await client.reply(to: pending, model: settings.model, effort: settings.effort, key: key)
+            var text = ""
+            // Each element is the whole reply so far, so the popup fills in as Claude writes.
+            for try await partial in client.stream(to: pending, model: settings.model, effort: settings.effort, key: key) {
+                text = partial
+                draft = partial
+            }
+            // A cancelled consumer ends the loop quietly; the partial text must not become a finished draft.
+            try Task.checkCancellation()
             request?.previousDrafts.append(text)
             draft = text
             lastModelDraft = text
