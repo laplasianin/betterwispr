@@ -101,10 +101,10 @@ struct ReplyView: View {
                 Text(ReplyUsage.label(reply.sessionCost)).font(.caption).monospacedDigit().foregroundStyle(.tertiary)
                     .help("What this reply has cost so far at \(reply.modelName)'s list price, including variants and edits")
             }
-            Text(reply.state == .generating ? "Esc to stop" : "Esc to close").font(.caption).foregroundStyle(.tertiary)
+            Text(reply.state == .generating ? "Esc to stop" : "⇧⏎ paste & send · ⌥⏎ new line · Esc").font(.caption).foregroundStyle(.tertiary)
             Button("Paste") { reply.paste() }
                 .buttonStyle(.borderedProminent)
-                .help("Paste into \(reply.appName) (Return)")
+                .help("Paste into \(reply.appName) (Return). Shift+Return also presses Return there, which sends in most chat apps.")
                 .disabled(reply.state != .preview || reply.isRecordingEdit)
         }
         .disabled(reply.isRecordingEdit)

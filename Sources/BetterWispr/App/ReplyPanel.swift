@@ -85,11 +85,12 @@ final class ReplyPanelController {
         keepOnScreen()
     }
 
-    /// Enter pastes, Shift+Enter is a line break, Escape closes, ⌘R regenerates, ⌘E records an edit.
+    /// Enter pastes, Shift+Enter pastes and sends, Option+Enter is a line break, Escape closes, ⌘R regenerates, ⌘E records an edit.
     private func handle(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         switch (event.keyCode, flags) {
         case (36, []), (76, []): reply.paste(); return true          // Return, keypad Enter
+        case (36, .shift), (76, .shift): reply.paste(andSend: true); return true
         case (53, []): reply.dismiss(); return true                  // Escape
         case (15, .command): reply.regenerate(); return true         // ⌘R
         case (14, .command): reply.editByVoice(); return true        // ⌘E

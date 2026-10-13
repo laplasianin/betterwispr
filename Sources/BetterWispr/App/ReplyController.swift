@@ -206,7 +206,8 @@ final class ReplyController {
         model.startRecording(held: false, reply: true)
     }
 
-    func paste() {
+    /// Pastes the draft into the target app; with `andSend`, presses Return there afterwards, which sends in most chat apps.
+    func paste(andSend: Bool = false) {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .preview, !isRecordingEdit, !text.isEmpty, let pending = request else { return }
         let target = target
@@ -223,7 +224,12 @@ final class ReplyController {
                 ? FocusedAppIntegration(keepsCopy: settings.copyToClipboard) : ClipboardIntegration()
             do {
                 let result = try await integration.deliver(text, to: target)
-                if result != .pasted(into: target?.localizedName ?? "your app") { ToastWindow.shared.show(Toast(result)) }
+                guard case .pasted = result else { ToastWindow.shared.show(Toast(result)); return }
+                if andSend, let target {
+                    // Give the paste time to land in the field before the Return that sends it.
+                    try? await Task.sleep(for: .milliseconds(150))
+                    Self.pressReturn(in: target)
+                }
             } catch {
                 ToastWindow.shared.show(Toast(failure: "Couldn’t paste the reply", error))
             }
@@ -261,6 +267,15 @@ final class ReplyController {
     }
 
     private var isFailed: Bool { if case .failed = state { true } else { false } }
+
+    /// Posts a Return key press to the app, the same way the guarded paste posts ⌘V.
+    private static func pressReturn(in app: NSRunningApplication) {
+        guard !app.isTerminated, let source = CGEventSource(stateID: .combinedSessionState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: false) else { return }
+        down.postToPid(app.processIdentifier)
+        up.postToPid(app.processIdentifier)
+    }
 
     // MARK: Test hooks
 
