@@ -227,10 +227,19 @@ final class ReplyController {
         dismiss()
     }
 
-    /// Shows the macOS Screen Recording prompt; the permission applies from the next reply on.
+    /// Asks macOS for Screen Recording. The system prompt appears only the first time; after that the request is silent,
+    /// so the fallback opens the Screen Recording pane where the app can be added by hand.
     func requestScreenRecording() {
         needsScreenRecording = !CGRequestScreenCaptureAccess()
         onChange?()
+        guard needsScreenRecording else { return }
+        if let pane = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(pane)
+        }
+        ToastWindow.shared.show(Toast(title: "Allow Screen Recording",
+                                      message: "In System Settings, add BetterWispr with + under Screen & System Audio Recording (it is at \(Bundle.main.bundlePath)), turn it on, then open BetterWispr again.",
+                                      systemImage: "rectangle.dashed.badge.record",
+                                      action: Toast.Action(title: "Quit BetterWispr") { NSApplication.shared.terminate(nil) }))
     }
 
     private var isFailed: Bool { if case .failed = state { true } else { false } }
