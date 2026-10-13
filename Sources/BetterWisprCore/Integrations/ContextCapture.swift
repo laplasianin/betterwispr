@@ -59,18 +59,17 @@ extension DictationContext {
         return lines.joined(separator: "\n")
     }
 
+    /// The focused window's frame and title through Accessibility, or nil values when the app has no focused window.
+    static func focusedWindowInfo(pid: pid_t) -> (frame: CGRect?, title: String?) {
+        let element = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        guard let window = element.element(kAXFocusedWindowAttribute) else { return (nil, nil) }
+        return (window.frame, window.string(kAXTitleAttribute))
+    }
+
     /// Reads the app's focused window pixels with Vision, matching it by frame and then title.
     private static func recognizedText(pid: pid_t, frame: CGRect?, title: String?) async -> String? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
-        let windows = content.windows.filter {
-            $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0
-        }
-        func distance(_ window: SCWindow) -> CGFloat {
-            guard let frame else { return .infinity }
-            return abs(window.frame.minX - frame.minX) + abs(window.frame.minY - frame.minY) + abs(window.frame.width - frame.width) + abs(window.frame.height - frame.height)
-        }
-        let nearest = windows.min { distance($0) < distance($1) }.flatMap { distance($0) <= 96 ? $0 : nil }
-        guard let window = nearest ?? windows.first(where: { title != nil && $0.title == title }) ?? windows.first else { return nil }
+        guard let window = await SCWindow.focused(pid: pid, frame: frame, title: title) else { return nil }
         let configuration = SCStreamConfiguration()
         let scale = min(2, 2_800 / max(window.frame.width, window.frame.height))
         configuration.width = max(1, Int(window.frame.width * scale))
@@ -82,5 +81,21 @@ extension DictationContext {
         request.automaticallyDetectsLanguage = true
         try? VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         return request.results?.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+    }
+}
+
+extension SCWindow {
+    /// The app's on-screen window nearest to `frame` (within 96 points), else the one titled `title`, else its first window.
+    static func focused(pid: pid_t, frame: CGRect?, title: String?) async -> SCWindow? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
+        let windows = content.windows.filter {
+            $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.isOnScreen && $0.frame.width > 0 && $0.frame.height > 0
+        }
+        func distance(_ window: SCWindow) -> CGFloat {
+            guard let frame else { return .infinity }
+            return abs(window.frame.minX - frame.minX) + abs(window.frame.minY - frame.minY) + abs(window.frame.width - frame.width) + abs(window.frame.height - frame.height)
+        }
+        let nearest = windows.min { distance($0) < distance($1) }.flatMap { distance($0) <= 96 ? $0 : nil }
+        return nearest ?? windows.first(where: { title != nil && $0.title == title }) ?? windows.first
     }
 }

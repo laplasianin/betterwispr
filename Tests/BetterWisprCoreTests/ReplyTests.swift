@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 @testable import BetterWisprCore
 
@@ -232,4 +234,27 @@ private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+@Test func windowSnapshotScalesLongEdgeAndEncodesJPEG() throws {
+    func image(width: Int, height: Int) throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.9, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return try #require(context.makeImage())
+    }
+    func size(of data: Data) throws -> (Int, Int, String) {
+        let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+        let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        let type = try #require(CGImageSourceGetType(source) as? String)
+        return (properties[kCGImagePropertyPixelWidth] as! Int, properties[kCGImagePropertyPixelHeight] as! Int, type)
+    }
+    let wide = try #require(WindowSnapshot.jpeg(try image(width: 3840, height: 2160)))
+    #expect(try size(of: wide) == (1920, 1080, "public.jpeg"))
+    let tall = try #require(WindowSnapshot.jpeg(try image(width: 1000, height: 4000)))
+    #expect(try size(of: tall) == (480, 1920, "public.jpeg"))
+    let small = try #require(WindowSnapshot.jpeg(try image(width: 800, height: 600)))
+    #expect(try size(of: small) == (800, 600, "public.jpeg"))
+    #expect(wide.count < 400_000)
 }
