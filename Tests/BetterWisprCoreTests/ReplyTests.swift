@@ -94,3 +94,142 @@ import Testing
     #expect(!text.contains("<USER_NAME>"))
     #expect(!text.contains("<WINDOW_TITLE>"))
 }
+
+@Test func claudeClientNormalizesKeysAndCleansReplies() throws {
+    #expect(try ClaudeClient.normalizedKey("  sk-ant-abc\n") == "sk-ant-abc")
+    #expect(throws: ReplyError.missingKey) { try ClaudeClient.normalizedKey("  \n") }
+    #expect(throws: ReplyError.invalidKey) { try ClaudeClient.normalizedKey("sk-ant\r\nX-Injected: 1") }
+    #expect(ClaudeClient.cleaned("\"Sure, Thursday works.\"") == "Sure, Thursday works.")
+    #expect(ClaudeClient.cleaned("“Sure, Thursday works.”\n") == "Sure, Thursday works.")
+    #expect(ClaudeClient.cleaned("Reply: Sure, Thursday works.") == "Sure, Thursday works.")
+    #expect(ClaudeClient.cleaned("\"Quoted\" start stays") == "\"Quoted\" start stays")
+    #expect(ClaudeClient.cleaned("Two\n\nparagraphs") == "Two\n\nparagraphs")
+}
+
+@Test func claudeClientParsesResponsesAndMapsErrors() throws {
+    let ok = Data(#"{"content":[{"type":"text","text":"Sure, Thursday works."}],"stop_reason":"end_turn"}"#.utf8)
+    #expect(try ClaudeClient.parse(ok, status: 200) == "Sure, Thursday works.")
+    let twoBlocks = Data(#"{"content":[{"type":"thinking","thinking":""},{"type":"text","text":"A"},{"type":"text","text":"B"}],"stop_reason":"end_turn"}"#.utf8)
+    #expect(try ClaudeClient.parse(twoBlocks, status: 200) == "A\nB")
+    #expect(throws: ReplyError.refused) {
+        try ClaudeClient.parse(Data(#"{"content":[],"stop_reason":"refusal","stop_details":{"type":"refusal","category":"general_harms"}}"#.utf8), status: 200)
+    }
+    #expect(throws: ReplyError.truncated) {
+        try ClaudeClient.parse(Data(#"{"content":[{"type":"text","text":"Sure"}],"stop_reason":"max_tokens"}"#.utf8), status: 200)
+    }
+    #expect(throws: ReplyError.emptyReply) {
+        try ClaudeClient.parse(Data(#"{"content":[{"type":"text","text":"  "}],"stop_reason":"end_turn"}"#.utf8), status: 200)
+    }
+    #expect(throws: ReplyError.emptyReply) { try ClaudeClient.parse(Data("<html>not json</html>".utf8), status: 200) }
+    #expect(throws: ReplyError.invalidKey) {
+        try ClaudeClient.parse(Data(#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#.utf8), status: 401)
+    }
+    #expect(throws: ReplyError.invalidKey) { try ClaudeClient.parse(Data("forbidden".utf8), status: 403) }
+    #expect(throws: ReplyError.rateLimited) { try ClaudeClient.parse(Data("{}".utf8), status: 429) }
+    #expect(throws: ReplyError.server(502)) { try ClaudeClient.parse(Data("<html><body>Bad gateway</body></html>".utf8), status: 502) }
+    #expect(throws: ReplyError.server(529)) { try ClaudeClient.parse(Data("{}".utf8), status: 529) }
+    #expect(throws: ReplyError.badRequest("model: not found")) {
+        try ClaudeClient.parse(Data(#"{"type":"error","error":{"type":"not_found_error","message":"model: not found"}}"#.utf8), status: 404)
+    }
+    #expect(throws: ReplyError.badRequest("HTTP 418")) { try ClaudeClient.parse(Data("teapot".utf8), status: 418) }
+}
+
+@Test func claudeClientSendsHeadersRetriesTransientFailuresAndTimesOut() async throws {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [ClaudeEndpointStub.self]
+    let client = ClaudeClient(configuration: configuration, retryDelay: .zero)
+    let request = ReplyRequest(instruction: "tell him I agree", windowText: nil, selectedText: nil, windowTitle: nil,
+                               screenshot: nil, userName: "", appName: "Telegram")
+
+    let probe = ClaudeEndpointStub.probe
+    probe.reset(script: [.reply("Sure, Thursday works.")])
+    #expect(try await client.reply(to: request, model: .opus, effort: .low, key: " sk-ant-test\n") == "Sure, Thursday works.")
+    var sent = probe.requests
+    #expect(sent.count == 1)
+    #expect(sent[0].url == "https://api.anthropic.com/v1/messages")
+    #expect(sent[0].headers["x-api-key"] == "sk-ant-test")
+    #expect(sent[0].headers["anthropic-version"] == "2023-06-01")
+    #expect(sent[0].headers["content-type"] == "application/json")
+    #expect(sent[0].body.contains(#""model":"claude-opus-5-5""#))
+    #expect(sent[0].body.contains("tell him I agree"))
+
+    probe.reset(script: [.status(429), .reply("After retry")])
+    #expect(try await client.reply(to: request, model: .opus, effort: .low, key: "k") == "After retry")
+    #expect(probe.requests.count == 2)
+
+    probe.reset(script: [.status(500), .status(503)])
+    await #expect(throws: ReplyError.server(503)) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
+    #expect(probe.requests.count == 2)
+
+    probe.reset(script: [.status(401)])
+    await #expect(throws: ReplyError.invalidKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "k") }
+    #expect(probe.requests.count == 1)
+
+    probe.reset(script: [.reply("ignored")])
+    await #expect(throws: ReplyError.missingKey) { try await client.reply(to: request, model: .opus, effort: .low, key: "") }
+    #expect(probe.requests.isEmpty)
+
+    var empty = request
+    empty.instruction = " \n"
+    await #expect(throws: ReplyError.emptyInstruction) { try await client.reply(to: empty, model: .opus, effort: .low, key: "k") }
+    #expect(probe.requests.isEmpty)
+
+    // A timeout is transient, so the client tries twice; both attempts must hang for the error to surface.
+    probe.reset(script: [.timeout, .timeout])
+    let quick = ClaudeClient(configuration: configuration, retryDelay: .zero, timeout: 0.2)
+    await #expect(throws: ReplyError.timedOut) { try await quick.reply(to: request, model: .opus, effort: .low, key: "k") }
+    #expect(probe.requests.count == 2)
+
+    probe.reset(script: [.reply("Hi")])
+    try await client.verify(key: "k", model: .haiku)
+    sent = probe.requests
+    #expect(sent[0].body.contains(#""model":"claude-haiku-5-5""#))
+    #expect(sent[0].body.contains(#""max_tokens":8"#))
+}
+
+/// Records requests and plays a scripted answer for each; a lock keeps it safe from URLSession's threads.
+final class ClaudeRequestProbe: @unchecked Sendable {
+    struct Request: Sendable { let url: String; let headers: [String: String]; let body: String }
+    enum Step: Sendable { case reply(String), status(Int), timeout }
+    private let lock = NSLock()
+    private var recorded: [Request] = []
+    private var script: [Step] = []
+    var requests: [Request] { lock.withLock { recorded } }
+    func reset(script: [Step]) { lock.withLock { recorded = []; self.script = script } }
+    func record(_ request: Request) -> Step {
+        lock.withLock { recorded.append(request); return script.isEmpty ? .status(500) : script.removeFirst() }
+    }
+}
+
+// URLSession calls URLProtocol on its own threads; the stub keeps no mutable state of its own and answers synchronously.
+private final class ClaudeEndpointStub: URLProtocol, @unchecked Sendable {
+    static let probe = ClaudeRequestProbe()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let count = stream.read(&buffer, maxLength: buffer.count)
+                if count <= 0 { break }
+                body.append(contentsOf: buffer.prefix(count))
+            }
+        }
+        let headers = (request.allHTTPHeaderFields ?? [:]).reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value }
+        let step = Self.probe.record(.init(url: request.url!.absoluteString, headers: headers, body: String(decoding: body, as: UTF8.self)))
+        let status: Int, data: Data
+        switch step {
+        case .timeout: return
+        case .status(let code): (status, data) = (code, Data("{}".utf8))
+        case .reply(let text):
+            (status, data) = (200, try! JSONSerialization.data(withJSONObject: ["content": [["type": "text", "text": text]], "stop_reason": "end_turn"]))
+        }
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
