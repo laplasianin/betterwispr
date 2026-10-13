@@ -143,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     private var capsule: CapsuleController?
     private var notetaker: NotetakerController?
+    private var replyPanel: ReplyPanelController?
     private var started = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -160,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         capsule = CapsuleController(model: model)
         model.onPresentationChange = { [weak self] in self?.capsule?.update() }
         notetaker = NotetakerController(model: model)
+        replyPanel = ReplyPanelController(reply: model.reply)
         model.onShowNotetaker = { [weak self] in self?.notetaker?.show($0) }
         model.registerShortcut()
         capsule?.update()
@@ -171,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.meetings.endForQuit()
         capsule?.close()
         notetaker?.close()
+        replyPanel?.close()
     }
 }
 
