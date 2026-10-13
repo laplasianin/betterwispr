@@ -87,7 +87,8 @@ import Testing
     let chunks = try await APISpeechProvider.audioChunks(url, seconds: 25)
     #expect(chunks.count == 2)
     #expect(chunks.allSatisfy { String(decoding: $0.prefix(4), as: UTF8.self) == "RIFF" })
-    #expect(chunks.reduce(0) { $0 + ($1.count - 44) / 2 } == 26 * 16_000)
+    let sampleCount = chunks.reduce(0) { $0 + ($1.count - 44) / 2 }
+    #expect(sampleCount == 26 * 16_000)
     let firstChunkByteCount: Int = 44 + 25 * 16_000 * 2
     #expect(chunks[0].count == firstChunkByteCount)
     #expect(chunks[0][22] == 1) // Mono, signed 16-bit PCM.
