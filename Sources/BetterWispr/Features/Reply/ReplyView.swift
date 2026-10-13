@@ -78,16 +78,23 @@ struct ReplyView: View {
 
     private var footer: some View {
         HStack(spacing: 8) {
-            Button { reply.regenerate() } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
-                .help("Regenerate (⌘R)")
-            Button { reply.editByVoice() } label: { Label("Edit by voice", systemImage: "mic") }
-                .help("Say a change to apply (⌘E), or hold the reply shortcut")
+            if reply.state == .generating {
+                // Stays up after the first words arrive, so a pause in the stream does not look like the end.
+                ProgressView().controlSize(.small)
+                Text("Writing with \(reply.modelName)…").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button { reply.regenerate() } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
+                    .help("Regenerate (⌘R)")
+                Button { reply.editByVoice() } label: { Label("Edit by voice", systemImage: "mic") }
+                    .help("Say a change to apply (⌘E), or hold the reply shortcut")
+            }
             Spacer()
-            Text("Esc to close").font(.caption).foregroundStyle(.tertiary)
+            Text(reply.state == .generating ? "Esc to stop" : "Esc to close").font(.caption).foregroundStyle(.tertiary)
             Button("Paste") { reply.paste() }
                 .buttonStyle(.borderedProminent)
                 .help("Paste into \(reply.appName) (Return)")
+                .disabled(reply.state != .preview || reply.isRecordingEdit)
         }
-        .disabled(reply.state == .generating || reply.isRecordingEdit)
+        .disabled(reply.isRecordingEdit)
     }
 }
