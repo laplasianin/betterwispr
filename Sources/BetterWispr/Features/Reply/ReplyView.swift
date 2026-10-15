@@ -93,19 +93,25 @@ struct ReplyView: View {
             } else {
                 Button { reply.regenerate() } label: { Label("Regenerate", systemImage: "arrow.clockwise") }
                     .help("Regenerate (⌘R)")
+                    .fixedSize()
                 Button { reply.editByVoice() } label: { Label("Edit by voice", systemImage: "mic") }
                     .help("Say a change to apply (⌘E), or hold the reply shortcut")
+                    .fixedSize()
             }
             Spacer()
             if reply.sessionCost > 0 {
                 Text(ReplyUsage.label(reply.sessionCost)).font(.caption).monospacedDigit().foregroundStyle(.tertiary)
                     .help("What this reply has cost so far at \(reply.modelName)'s list price, including variants and edits")
+                    .fixedSize()
             }
-            Text(reply.state == .generating ? "Esc to stop" : "⇧⏎ paste & send · ⌥⏎ new line · Esc").font(.caption).foregroundStyle(.tertiary)
+            // The hint gives way first when the row is tight; the buttons keep their full labels.
+            Text(reply.state == .generating ? "Esc to stop" : "⇧⏎ paste & send\n⌥⏎ new line · Esc")
+                .font(.caption).foregroundStyle(.tertiary).multilineTextAlignment(.trailing).lineLimit(2).layoutPriority(-1)
             Button("Paste") { reply.paste() }
                 .buttonStyle(.borderedProminent)
                 .help("Paste into \(reply.appName) (Return). Shift+Return also presses Return there, which sends in most chat apps.")
                 .disabled(reply.state != .preview || reply.isRecordingEdit)
+                .fixedSize()
         }
         .disabled(reply.isRecordingEdit)
     }

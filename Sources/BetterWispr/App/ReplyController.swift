@@ -292,6 +292,23 @@ final class ReplyController {
 
     func failForTesting(_ error: ReplyError) { state = .failed(error) }
 
+    #if DEBUG
+    /// Opens the popup with made-up content for documentation screenshots; `BETTERWISPR_REPLY_DEMO=preview|generating`.
+    func showDemo(generating: Bool) {
+        let draft = "Yes, I'll send the deck by Wednesday evening so you have a day to look through it before the meeting. "
+            + "I'm adding one more slide with the Q4 numbers, so if there is anything else you want covered, tell me today."
+        restoreForTesting(draft: draft, instruction: "tell him yes, deck on Wednesday, and ask if he wants anything else in it")
+        appName = "Telegram"
+        windowTitle = "Alex Zhokhov"
+        replyingTo = "Alex · «Can you send the deck before Thursday?»"
+        sessionCost = 0.014
+        if generating {
+            self.draft = String(draft.prefix(58))
+            state = .generating
+        }
+    }
+    #endif
+
     private func reset() {
         context?.cancel()
         screenshot?.cancel()

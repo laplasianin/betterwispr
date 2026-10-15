@@ -165,6 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onShowNotetaker = { [weak self] in self?.notetaker?.show($0) }
         model.registerShortcut()
         capsule?.update()
+        #if DEBUG
+        ReplyDemo.run(model: model)
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

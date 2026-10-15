@@ -22,7 +22,7 @@ BetterWispr is a private, offline speech-to-text app and an open-source alternat
 - **Meetings**: live transcript of you and the other side, plus on-device titles, summaries and action items with Apple Intelligence or a local Ollama model.
 - **History**: raw and corrected transcripts, stored locally (can be turned off).
 - **Bring your own model**: optional Sarvam AI, Smallest AI or any OpenAI-compatible endpoint.
-- **Reply with Claude**: hold a second shortcut (⌥⇧ Space) in any chat or email, say what to reply, and Claude writes it from a screenshot and the window text. Edit the draft in a popup, regenerate it, or say a change, then press Return to paste. Needs your own Anthropic API key; nothing is sent otherwise.
+- **Reply with Claude**: hold a second shortcut (⌥⇧ Space) in any chat or email, say what to reply, and Claude writes it from a screenshot and the window text. Edit the draft in a popup, regenerate it, or say a change, then press Return to paste. Needs your own Anthropic API key; nothing is sent otherwise. [How it works](docs/reply-mode.md).
 
 ## Requirements
 
